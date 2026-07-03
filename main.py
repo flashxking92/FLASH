@@ -678,17 +678,30 @@ async def cmd_userlist(client, message):
         await message.reply(f"❌ **ᴇʀʀᴏʀ:** `{str(e)}`")
 
 ## ==================== ᴄᴜꜱᴛᴏᴍ ʙᴜᴛᴛᴏɴ ꜱᴛʏʟɪɴɢ ====================
+from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
 class ButtonStyle:
     """ᴀᴠᴀɪʟᴀʙʟᴇ ᴛᴇʟᴇɢʀᴀᴍ ʙᴜᴛᴛᴏɴ ꜱᴛʏʟᴇꜱ"""
-    PRIMARY = "bg_primary" #Dark Blue colour
-    SUCCESS = "bg_success" #Green colour
-    DANGER = "bg_danger" #red colour
+    PRIMARY = "bg_primary"   # Dark Blue colour
+    SUCCESS = "bg_success"   # Green colour
+    DANGER = "bg_danger"     # Red colour
 
 def styled_button(text: str, callback_data: str = None, url: str = None, style: str = ButtonStyle.PRIMARY) -> InlineKeyboardButton:
     """ᴄʀᴇᴀᴛᴇ ꜱᴛʏʟᴇᴅ ʙᴜᴛᴛᴏɴ"""
     btn = InlineKeyboardButton(text=text, callback_data=callback_data, url=url)
+    
+    # Python attribute assign kiya
     btn.style = style
+    
+    # FIX: Pyrogram ka internal JSON exporter object ko dict me badalne ke liye
+    # 'default' property use karta hai. Humne use hi override kar diya taaki style parameters 100% send ho sakein.
+    btn.default = lambda *args, **kwargs: {
+        "text": btn.text,
+        "callback_data": btn.callback_data,
+        "url": btn.url,
+        "style": btn.style
+    }
+    
     return btn
 
 def build_keyboard(buttons: list, row_width: int = 2) -> InlineKeyboardMarkup:
@@ -708,7 +721,7 @@ def build_keyboard(buttons: list, row_width: int = 2) -> InlineKeyboardMarkup:
             row.append(styled_button(text, callback_data=callback, url=url, style=style))
         else:
             text, callback = btn
-            row.append(styled_button(text, callback_data=callback))
+            row.append(styled_button(text, callback_data=callback, style=ButtonStyle.PRIMARY))
         
         if len(row) >= row_width:
             rows.append(row)
@@ -717,7 +730,12 @@ def build_keyboard(buttons: list, row_width: int = 2) -> InlineKeyboardMarkup:
     if row:
         rows.append(row)
     
-    return InlineKeyboardMarkup(rows)
+    # Pyrogram structure settings fix
+    markup = InlineKeyboardMarkup(rows)
+    markup.inline_keyboard = rows
+    return markup
+
+
 
 
 # ==================== ᴄᴀʟʟʙᴀᴄᴋ ʜᴀɴᴅʟᴇʀꜱ ====================
