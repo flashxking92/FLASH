@@ -1,16 +1,5 @@
-# Audio Forwarder Bot - Python dependencies
-# Install with:  pip install -r requirements.txt
-
-# Telegram MTProto client
-pyrogram>=2.0.106
-TgCrypto>=1.2.5
-
-# Voice-chat streaming / recording (modern PyTgCalls API)
-py-tgcalls>=2.0.0
-
-# Audio processing
-numpy>=1.24
-scipy>=1.10        # optional but recommended (enables advanced bass/treble)
-
-# Optional: load credentials from a .env file (see note in setup.sh)
-python-dotenv>=1.0.0
+Pyrogram==2.0.106
+pytgcalls==3.0.0.dev24
+numpy==2.2.6
+scipy==1.15.3
+tgcrypto
