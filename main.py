@@ -4,7 +4,6 @@
 ᴏɴʟʏ ᴏᴡɴᴇʀ ᴀɴᴅ ᴀᴘᴘʀᴏᴠᴇᴅ ᴜꜱᴇʀꜱ ᴄᴀɴ ᴜꜱᴇ ᴄᴏᴍᴍᴀɴᴅꜱ
 """
 import numpy as np
-from scipy import signal
 import os
 import re
 import json
@@ -95,7 +94,6 @@ STATE_FILE = "bot_state.json"
 
 def save_state():
     """ᴘᴇʀꜱɪꜱᴛ ᴀᴘᴘʀᴏᴠᴇᴅ ᴜꜱᴇʀꜱ ᴀɴᴅ ᴀᴜᴅɪᴏ ᴄᴏɴꜰɪɢ ᴛᴏ ᴅɪꜱᴋ"""
-    global RECORD_SOURCE  
     try:
         with open(STATE_FILE, "w") as f:
             json.dump({
@@ -108,7 +106,7 @@ def save_state():
 
 def load_state():
     """ʟᴏᴀᴅ ᴘᴇʀꜱɪꜱᴛᴇᴅ ꜱᴛᴀᴛᴇ ɪꜰ ᴀᴠᴀɪʟᴀʙʟᴇ"""
-    global audio_config, RECORD_SOURCE
+    global RECORD_SOURCE  # audio_config is only mutated in place (.update()), no global needed
     try:
         with open(STATE_FILE, "r") as f:
             data = json.load(f)
@@ -557,7 +555,7 @@ async def cmd_approve(client, message):
 ✅ **ᴜꜱᴇʀ ᴀᴘᴘʀᴏᴠᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**
 
 ────────────────────
-👤 **ɴᴀᴍᴇ:** {user_mention}
+👤 **ɴᴀᴍᴇ:** {first_name} ({user_mention})
 🔢 **ɪᴅ:** `{user_id}`
 📝 **ᴜꜱᴇʀɴᴀᴍᴇ:** @{username}
 📊 **ꜱᴛᴀᴛᴜꜱ:** 🟢 ᴀᴘᴘʀᴏᴠᴇᴅ
@@ -677,50 +675,43 @@ async def cmd_userlist(client, message):
     except Exception as e:
         await message.reply(f"❌ **ᴇʀʀᴏʀ:** `{str(e)}`")
 
-## ==================== ᴄᴜꜱᴛᴏᴍ ʙᴜᴛᴛᴏɴ ꜱᴛʏʟɪɴɢ ====================
-from pyrogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+# ==================== ᴄᴜꜱᴛᴏᴍ ʙᴜᴛᴛᴏɴ ꜱᴛʏʟɪɴɢ ====================
+
+from pyrogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 class ButtonStyle:
-    """ᴀᴠᴀɪʟᴀʙʟᴇ ᴛᴇʟᴇɢʀᴀᴍ ʙᴜᴛᴛᴏɴ ꜱᴛʏʟᴇꜱ"""
-    PRIMARY = "bg_primary"   # Dark Blue colour
-    SUCCESS = "bg_success"   # Green colour
-    DANGER = "bg_danger"     # Red colour
+    PRIMARY = "bg_primary"
+    SUCCESS = "bg_success"
+    DANGER = "bg_danger"
 
 def styled_button(text: str, callback_data: str = None, url: str = None, style: str = ButtonStyle.PRIMARY) -> InlineKeyboardButton:
-    """ᴄʀᴇᴀᴛᴇ ꜱᴛʏʟᴇᴅ ʙᴜᴛᴛᴏɴ"""
-    btn = InlineKeyboardButton(text=text, callback_data=callback_data, url=url)
+    """ᴄʀᴇᴀᴛᴇ ᴀ ʙᴜᴛᴛᴏɴ ᴀɴᴅ ɪɴᴊᴇᴄᴛ ᴛᴇʟᴇɢʀᴀᴍ ʙᴀᴄᴋᴇɴᴅ ᴄᴏʟᴏʀ ꜱᴛʏʟᴇ"""
+    if url:
+        btn = InlineKeyboardButton(text=text, url=url)
+    else:
+        btn = InlineKeyboardButton(text=text, callback_data=callback_data)
     
-    # Python attribute assign kiya
-    btn.style = style
-    
-    # FIX: Pyrogram ka internal JSON exporter object ko dict me badalne ke liye
-    # 'default' property use karta hai. Humne use hi override kar diya taaki style parameters 100% send ho sakein.
-    btn.default = lambda *args, **kwargs: {
-        "text": btn.text,
-        "callback_data": btn.callback_data,
-        "url": btn.url,
-        "style": btn.style
-    }
-    
+    # 🔥 Backend color injection
+    btn.__dict__["style"] = style
     return btn
 
 def build_keyboard(buttons: list, row_width: int = 2) -> InlineKeyboardMarkup:
-    """ʙᴜɪʟᴅ ᴋᴇʏʙᴏᴀʀᴅ ꜰʀᴏᴍ ʙᴜᴛᴛᴏɴ ᴅᴀᴛᴀ"""
+    """ʙᴜɪʟᴅ ᴋᴇʏʙᴏᴀʀᴅ ꜰʀᴏᴍ ʙᴜᴛᴛᴏɴ ᴅᴀᴛᴀ (ᴄᴏʟᴏʀ ꜱᴜᴘᴘᴏʀᴛᴇᴅ)"""
     rows, row = [], []
     
     for btn in buttons:
-        if len(btn) == 3:
-            text, callback, style = btn
-            if style not in [ButtonStyle.PRIMARY, ButtonStyle.SUCCESS, ButtonStyle.DANGER]:
-                style = ButtonStyle.PRIMARY
-            row.append(styled_button(text, callback_data=callback, style=style))
-        elif len(btn) == 4:
+        if len(btn) == 4:
             text, callback, style, url = btn
             if style not in [ButtonStyle.PRIMARY, ButtonStyle.SUCCESS, ButtonStyle.DANGER]:
                 style = ButtonStyle.PRIMARY
             row.append(styled_button(text, callback_data=callback, url=url, style=style))
+        elif len(btn) == 3:
+            text, callback, style = btn
+            if style not in [ButtonStyle.PRIMARY, ButtonStyle.SUCCESS, ButtonStyle.DANGER]:
+                style = ButtonStyle.PRIMARY
+            row.append(styled_button(text, callback_data=callback, style=style))
         else:
-            text, callback = btn
+            text, callback = btn[0], btn[1]
             row.append(styled_button(text, callback_data=callback, style=ButtonStyle.PRIMARY))
         
         if len(row) >= row_width:
@@ -730,19 +721,13 @@ def build_keyboard(buttons: list, row_width: int = 2) -> InlineKeyboardMarkup:
     if row:
         rows.append(row)
     
-    # Pyrogram structure settings fix
-    markup = InlineKeyboardMarkup(rows)
-    markup.inline_keyboard = rows
-    return markup
-
-
-
+    return InlineKeyboardMarkup(rows)
 
 # ==================== ᴄᴀʟʟʙᴀᴄᴋ ʜᴀɴᴅʟᴇʀꜱ ====================
 
-@bot_app.on_callback_query()
+@bot_app.on_callback_query(~pyro_filters.regex(r"^panel_"))
 async def handle_callbacks(client, callback_query: CallbackQuery):
-    """ʜᴀɴᴅʟᴇ ᴀʟʟ ᴄᴀʟʟʙᴀᴄᴋ Qᴜᴇʀɪᴇꜱ"""
+    """ʜᴀɴᴅʟᴇ ᴀʟʟ ɴᴏɴ-ᴘᴀɴᴇʟ ᴄᴀʟʟʙᴀᴄᴋ Qᴜᴇʀɪᴇꜱ (ꜱᴇᴇ panel_callbacks ꜰᴏʀ panel_* ᴅᴀᴛᴀ)"""
     data = callback_query.data
     user_id = callback_query.from_user.id
     
@@ -875,11 +860,14 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
 /status - ꜱʏꜱᴛᴇᴍ ꜱᴛᴀᴛᴜꜱ
 /list - ꜰᴏʀᴡᴀʀᴅɪɴɢ ʟɪꜱᴛ
 /id - ɢᴇᴛ ᴄʜᴀᴛ ɪᴅ
+/panel - ᴄᴏɴᴛʀᴏʟ ᴘᴀɴᴇʟ (ʙᴜᴛᴛᴏɴꜱ)
 ────────────────────
 👤 **ᴜꜱᴇʀ ᴍɢᴍᴛ** (ᴏᴡɴᴇʀ)
 /approve - ᴀᴅᴅ ᴜꜱᴇʀ
 /disapprove - ʀᴇᴍᴏᴠᴇ
 /userlist - ʟɪꜱᴛ ᴜꜱᴇʀꜱ
+/setrecordgroup <ɪᴅ> - ᴄʜᴀɴɢᴇ ꜱᴏᴜʀᴄᴇ
+/restart - ʀᴇꜱᴛᴀʀᴛ ʙᴏᴛ
 """
         keyboard = build_keyboard([
             ("🏠 ʜᴏᴍᴇ", "back_start", ButtonStyle.SUCCESS)
@@ -1057,11 +1045,14 @@ async def cmd_help(client, message):
 /status - ꜱʏꜱᴛᴇᴍ ꜱᴛᴀᴛᴜꜱ
 /list - ꜰᴏʀᴡᴀʀᴅɪɴɢ ʟɪꜱᴛ
 /id - ɢᴇᴛ ᴄʜᴀᴛ ɪᴅ
+/panel - ᴄᴏɴᴛʀᴏʟ ᴘᴀɴᴇʟ (ʙᴜᴛᴛᴏɴꜱ)
 ────────────────────
 👤 **ᴜꜱᴇʀ ᴍɢᴍᴛ** (ᴏᴡɴᴇʀ)
 /approve - ᴀᴅᴅ ᴜꜱᴇʀ
 /disapprove - ʀᴇᴍᴏᴠᴇ
 /userlist - ʟɪꜱᴛ ᴜꜱᴇʀꜱ
+/setrecordgroup <ɪᴅ> - ᴄʜᴀɴɢᴇ ꜱᴏᴜʀᴄᴇ
+/restart - ʀᴇꜱᴛᴀʀᴛ ʙᴏᴛ
 """
     keyboard = build_keyboard([
         ("🏠 ʜᴏᴍᴇ", "back_start", ButtonStyle.SUCCESS),
@@ -1134,7 +1125,7 @@ async def cmd_stats(client, message):
 @bot_app.on_message(pyro_filters.command("record") & authorized_only())
 async def cmd_record(client, message):
     """ꜱᴛᴀʀᴛ ʀᴇᴄᴏʀᴅɪɴɢ ꜰʀᴏᴍ ꜱᴏᴜʀᴄᴇ ɢʀᴏᴜᴘ"""
-    global is_recording, RECORD_SOURCE
+    global is_recording
     if is_recording:
         await message.reply(
             "⚠️ **ᴀʟʀᴇᴀᴅʏ ʀᴇᴄᴏʀᴅɪɴɢ!**\n\n"
@@ -1176,7 +1167,6 @@ async def cmd_record(client, message):
 @bot_app.on_message(pyro_filters.command("join") & authorized_only())
 async def cmd_join(client, message):
     """ꜰᴏʀᴡᴀʀᴅ ᴀᴜᴅɪᴏ ᴛᴏ ᴀ ᴄʜᴀᴛ"""
-    global forward_chats
     parts = message.text.split()
     if len(parts) < 2:
         join_help = """
@@ -1255,7 +1245,7 @@ async def cmd_join(client, message):
 @bot_app.on_message(pyro_filters.command("rejoin") & authorized_only())
 async def cmd_rejoin(client, message):
     """ʟᴇᴀᴠᴇ ᴀɴᴅ ᴊᴏɪɴ ᴀʟʟ ᴄʜᴀᴛꜱ ᴀɢᴀɪɴ (ʀᴇᴄᴏᴠᴇʀ ꜰʀᴏᴍ ɴᴇᴛᴡᴏʀᴋ ɪꜱꜱᴜᴇꜱ)"""
-    global is_recording, forward_chats
+    global is_recording
     
     status_msg = await message.reply(
         "🔄 **ʀᴇᴊᴏɪɴɪɴɢ ᴀʟʟ ᴄʜᴀᴛꜱ...**\n\n"
@@ -1410,17 +1400,24 @@ async def cmd_leaverecord(client, message):
 @bot_app.on_message(pyro_filters.command("leave") & authorized_only())
 async def cmd_leave(client, message):
     """ʟᴇᴀᴠᴇ ᴀ ꜱᴘᴇᴄɪꜰɪᴄ ᴄʜᴀᴛ ᴏʀ ᴀʟʟ ᴄʜᴀᴛꜱ"""
-    global forward_chats
     parts = message.text.split()
     if len(parts) >= 2:
         chat_id_str = re.sub(r'[^\d-]', '', parts[1])
         try:
             chat_id = int(chat_id_str)
-            if chat_id not in forward_chats:
-                await message.reply(
-                    f"⚠️ **ɴᴏᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ ᴛᴏ ᴛʜɪꜱ ᴄʜᴀᴛ!**\n\n🎯 `{chat_id}`"
-                )
-                return
+        except ValueError:
+            await message.reply(
+                f"❌ **ɪɴᴠᴀʟɪᴅ ᴄʜᴀᴛ ɪᴅ!**\n\n"
+                f"📌 **ʏᴏᴜ ᴇɴᴛᴇʀᴇᴅ:** `{parts[1]}`\n"
+                f"💡 ᴜꜱᴇ ᴀ ɴᴜᴍᴇʀɪᴄ ɪᴅ (ᴇ.ɢ., `-1003929100976`)"
+            )
+            return
+        if chat_id not in forward_chats:
+            await message.reply(
+                f"⚠️ **ɴᴏᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ ᴛᴏ ᴛʜɪꜱ ᴄʜᴀᴛ!**\n\n🎯 `{chat_id}`"
+            )
+            return
+        try:
             status_msg = await message.reply(f"🔄 **ʟᴇᴀᴠɪɴɢ `{chat_id}`...**")
             await call_py.leave_call(chat_id)
             forward_chats.discard(chat_id)
@@ -1438,11 +1435,8 @@ async def cmd_leave(client, message):
             await status_msg.edit_text(leave_msg)
             logger.info(f"ʟᴇꜰᴛ ᴄʜᴀᴛ {chat_id}")
         except Exception as e:
-            await message.reply(
-                f"❌ **ɪɴᴠᴀʟɪᴅ ᴄʜᴀᴛ ɪᴅ!**\n\n"
-                f"📌 **ʏᴏᴜ ᴇɴᴛᴇʀᴇᴅ:** `{parts[1]}`\n"
-                f"💡 ᴜꜱᴇ ᴀ ɴᴜᴍᴇʀɪᴄ ɪᴅ (ᴇ.ɢ., `-1003929100976`)"
-            )
+            logger.error(f"ᴄᴍᴅ_ʟᴇᴀᴠᴇ ᴇʀʀᴏʀ ꜰᴏʀ {chat_id}: {e}")
+            await message.reply(f"❌ **ᴇʀʀᴏʀ ʟᴇᴀᴠɪɴɢ ᴄʜᴀᴛ!**\n\n⚠️ `{str(e)}`")
     else:
         if not forward_chats:
             await message.reply(
@@ -1475,7 +1469,7 @@ async def cmd_leave(client, message):
 @bot_app.on_message(pyro_filters.command("leaveall") & authorized_only())
 async def cmd_leaveall(client, message):
     """ʟᴇᴀᴠᴇ ᴀʟʟ ᴄʜᴀᴛꜱ ɪɴᴄʟᴜᴅɪɴɢ ꜱᴏᴜʀᴄᴇ"""
-    global is_recording, forward_chats
+    global is_recording
     total_forward = len(forward_chats)
     status_msg = await message.reply(
         "🔄 **ᴅɪꜱᴄᴏɴɴᴇᴄᴛɪɴɢ ᴀʟʟ ᴄʜᴀᴛꜱ...**\n\n📡 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ ᴀʟʟ ᴄᴏɴɴᴇᴄᴛɪᴏɴꜱ..."
@@ -1952,7 +1946,7 @@ async def cmd_setrecordgroup(client, message):
 @bot_app.on_message(pyro_filters.command("restart") & pyro_filters.user(OWNER_ID))
 async def cmd_restart(client, message):
     """ʀᴇꜱᴛᴀʀᴛ ᴛʜᴇ ʙᴏᴛ - ᴄʟᴇᴀɴ ᴀɴᴅ ʀᴇᴄᴏɴɴᴇᴄᴛ"""
-    global is_recording, forward_chats, is_muted, call_py  # ✅ Move global to top
+    global is_recording, is_muted, call_py
     
     try:
         status_msg = await message.reply(
@@ -2001,6 +1995,11 @@ async def cmd_restart(client, message):
         
         # ===== 5. RESTART PYTGCALLS =====
         call_py = PyTgCalls(user_app)
+        # Re-register the microphone stream handler on the NEW instance —
+        # the @call_py.on_update decorator only bound audio_forwarder to the
+        # old object, so without this, audio forwarding silently stops
+        # working after every /restart.
+        call_py.on_update(pytg_filters.stream_frame(Direction.INCOMING, Device.MICROPHONE))(audio_forwarder)
         await call_py.start()
         logger.info("🔄 ᴘʏᴛɢᴄᴀʟʟꜱ ʀᴇꜱᴛᴀʀᴛᴇᴅ")
         
@@ -2106,9 +2105,9 @@ async def cmd_panel(client, message):
 
 # ==================== ᴘᴀɴᴇʟ ᴄᴀʟʟʙᴀᴄᴋ ʜᴀɴᴅʟᴇʀꜱ ====================
 
-@bot_app.on_callback_query()
+@bot_app.on_callback_query(pyro_filters.regex(r"^panel_"))
 async def panel_callbacks(client, callback_query: CallbackQuery):
-    """ʜᴀɴᴅʟᴇ ᴀʟʟ ᴘᴀɴᴇʟ ᴄᴀʟʟʙᴀᴄᴋ Qᴜᴇʀɪᴇꜱ"""
+    """ʜᴀɴᴅʟᴇ ᴀʟʟ panel_* ᴄᴀʟʟʙᴀᴄᴋ Qᴜᴇʀɪᴇꜱ ꜰʀᴏᴍ /panel"""
     global is_muted, audio_config
     
     data = callback_query.data
@@ -2323,6 +2322,7 @@ async def refresh_panel(client, callback_query: CallbackQuery):
             reply_markup=keyboard
         )
     except Exception as e:
+        logger.debug(f"ʀᴇꜰʀᴇꜱʜ_ᴘᴀɴᴇʟ ᴇᴅɪᴛ ꜰᴀɪʟᴇᴅ, ʀᴇꜱᴇɴᴅɪɴɢ: {e}")
         try:
             await callback_query.message.delete()
             await callback_query.message.reply_text(
