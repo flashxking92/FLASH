@@ -45,9 +45,9 @@ from pytgcalls.exceptions import NoActiveGroupCall
 # here have been exposed and should be rotated (new bot token + new session).
 API_ID = int(os.getenv("API_ID", "29177322"))
 API_HASH = os.getenv("API_HASH", "1b8573accde3d0b7c35e43cdbb36e523")
-BOT_TOKEN = os.getenv("BOT_TOKEN", "8554005804:AAFW619nuJXTvh3P4vAEIzKVx3CkEDs7cqM")
+BOT_TOKEN = os.getenv("BOT_TOKEN", "8554005804:AAGjW8m_T6e9SrWmzXmLechUKYgANbz-IDs")
 OWNER_ID = int(os.getenv("OWNER_ID", "8305984975"))
-STRING_SESSION = "BQG9NeoAU_jELWZGDhAPa2hBlnfV4IpzRVUUUdNg9b6ALRdc4rnJnb6N5vRuwkNLYy2s-rDTjwRPldEEzWqinSzbUuqBVmJuypmd3W_NbYxb6gTCy17tBPvqtYRkR_K_EFZccIAiWUOpMy61l937_pnc4QpUteCXBPeTFXLLzfJXA9x-Lw-s86CyyGS0fv9AOY3pDSLc_XYZkQfnkw026K4Tku2YPpQf-hrmwHbo27vwmWJgEjQVbBZMHijuJR-7_zqKlWM1oS0g_8l_n7lW7AqlpVS7A70WoIAKYcadPbe6bCwcJyAs9FBhjES8Xf_pZ27gkY2Kl73iKmkzM1fa4ocUY_vm0QAAAAIJm0jrAA"
+STRING_SESSION = "BQG9NeoATaiN3vEJACN6JrgJqKMx8tabfglB6GcACzClIgWvG0CmokfH3kum5pVjou1CpR1iaJoE5eyRwXkCHWTxDc3JtbgvUbhiXOZ_WEy6Giv-inOiZFSV9TqS0Yz_GoFzlm1OMYAQ6rcy6CYj5BiSWecAF-dj2Dna1XANmKjywxJx6dPrBfmEh48nQKfrQHu49auWLXT1yKHVSWKch31VvEW29R_lgHn1I1gKkpYl2OMhC1GqzZMfkpsTIAHK5OQ4RiDo2ZHrvFFs_JSka7M-hQrdXFtV1c9eJGZpAZIoVIcwabHSccu_zlS25DAYAFCefqC9NiWU2DNCaYozV5qGaOwDLgAAAAIJm0jrAA"
 STRING_SESSION = os.getenv("STRING_SESSION", STRING_SESSION)
 RECORD_GROUP = int(os.getenv("RECORD_GROUP", "-1003970175858"))
 # ======================================================
