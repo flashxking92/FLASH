@@ -1218,10 +1218,12 @@ class StyledInlineKeyboardButton(InlineKeyboardButton):
         
         if self.callback_data is not None:
             data_bytes = bytes(self.callback_data, "utf-8") if isinstance(self.callback_data, str) else self.callback_data
+            # FIXED: Use getattr with default False for requires_password
+            requires_password = getattr(self, 'requires_password', False)
             return RawKeyboardButtonCallback(
                 text=self.text,
                 data=data_bytes,
-                requires_password=self.requires_password,
+                requires_password=requires_password,
                 style=style_obj
             )
             
