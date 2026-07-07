@@ -43,12 +43,25 @@ from pytgcalls.types import (
     Device,
     Direction,
     ExternalMedia,
+    Frame,
     MediaStream,
     RecordStream,
     StreamFrames
 )
-from pytgcalls.types.raw import AudioParameters
+from pytgcalls.types.raw import (
+    AudioParameters,
+    AudioStream,
+    Stream,
+    VideoParameters,
+    VideoStream,
+)
 from pytgcalls.exceptions import NoActiveGroupCall
+
+# MediaSource enum comes from the native ntgcalls binding
+try:
+    from ntgcalls import MediaSource
+except Exception:  # pragma: no cover - ntgcalls ships with pytgcalls
+    MediaSource = None
 
 
 # ==================== ᴄᴏɴꜰɪɢᴜʀᴀᴛɪᴏɴ ====================
@@ -71,6 +84,34 @@ logging.getLogger("pyrogram").setLevel(logging.WARNING)
 logging.getLogger("pytgcalls").setLevel(logging.WARNING)
 
 AUDIO_PARAMETERS = AudioParameters(bitrate=48000, channels=2)
+
+# ==================== ᴠɪᴅᴇᴏ (ꜱᴄʀᴇᴇɴ / ᴄᴀᴍᴇʀᴀ) ᴄᴏɴꜰɪɢᴜʀᴀᴛɪᴏɴ ====================
+# Video relay pushes raw yuv420p frames (produced by ffmpeg) into the voice chat
+# as a CAMERA feed and/or a SCREEN (presentation) feed, without touching audio.
+VIDEO_WIDTH = int(os.getenv("VIDEO_WIDTH", "1280"))
+VIDEO_HEIGHT = int(os.getenv("VIDEO_HEIGHT", "720"))
+VIDEO_FPS = int(os.getenv("VIDEO_FPS", "30"))
+VIDEO_PARAMETERS = VideoParameters(width=VIDEO_WIDTH, height=VIDEO_HEIGHT, frame_rate=VIDEO_FPS)
+
+# Default media sources. A source can be a local file, an http(s)/rtmp/rtsp URL
+# or live stream, or a capture display when an input "format" (e.g. x11grab /
+# gdigrab / v4l2) is set. Configure via env vars or the /setvideo command.
+video_sources = {
+    "screen": {
+        "source": os.getenv("SCREEN_SOURCE", os.getenv("VIDEO_SOURCE", "")),
+        "format": os.getenv("SCREEN_INPUT_FORMAT", ""),
+    },
+    "camera": {
+        "source": os.getenv("CAMERA_SOURCE", os.getenv("VIDEO_SOURCE", "")),
+        "format": os.getenv("CAMERA_INPUT_FORMAT", ""),
+    },
+}
+
+# Runtime video state
+video_state = {}   # chat_id -> {"screen": bool, "camera": bool}
+video_relays = {}  # (chat_id, "screen"|"camera") -> asyncio.Task
+chat_titles = {}   # chat_id -> cached title
+video_lock = asyncio.Lock()
 
 # ==================== ᴄʟɪᴇɴᴛꜱ ====================
 bot_app = Client("bot_session_v5", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -513,6 +554,413 @@ async def join_call_safe(chat_id):
     except Exception as e:
         return False, str(e)
 
+# ==================== ᴠɪᴅᴇᴏ ʀᴇʟᴀʏ (ꜱᴄʀᴇᴇɴ / ᴄᴀᴍᴇʀᴀ) ====================
+# The bot pushes raw yuv420p video frames (produced by ffmpeg) into a voice chat
+# as a CAMERA feed and/or a SCREEN (presentation) feed. Toggling video calls
+# call_py.play() again on a chat we are ALREADY in, which updates the stream
+# sources in-place (no leave / no rejoin) and always keeps the external
+# MICROPHONE track -- so the forwarded audio keeps flowing without interruption.
+
+KIND_TO_FIELDS = {"scr": ("screen",), "cam": ("camera",), "both": ("screen", "camera")}
+KIND_LABEL = {"scr": "ꜱᴄʀᴇᴇɴ ꜱʜᴀʀᴇ", "cam": "ᴄᴀᴍᴇʀᴀ", "both": "ꜱᴄʀᴇᴇɴ + ᴄᴀᴍᴇʀᴀ"}
+FIELD_DEVICE = {"screen": Device.SCREEN, "camera": Device.CAMERA}
+
+
+def _video_source_ready(field):
+    # A configured source is OPTIONAL now: when nothing is set we stream a solid
+    # black screen, so video is always ready to start.
+    return True
+
+
+def _build_video_command(source, input_format):
+    """Build an ffmpeg command that outputs raw yuv420p frames on stdout."""
+    cmd = ["ffmpeg", "-hide_banner", "-loglevel", "error"]
+    if not source and not input_format:
+        # No source configured -> stream a solid BLACK screen (never ends).
+        cmd += [
+            "-re", "-f", "lavfi",
+            "-i", f"color=c=black:s={VIDEO_WIDTH}x{VIDEO_HEIGHT}:r={VIDEO_FPS}",
+            "-an",
+            "-vf", "format=yuv420p",
+            "-r", str(VIDEO_FPS),
+            "-f", "rawvideo",
+            "-pix_fmt", "yuv420p",
+            "pipe:1",
+        ]
+        return cmd
+    if input_format:
+        # Live capture device (x11grab / gdigrab / v4l2 / avfoundation ...)
+        if input_format in ("x11grab", "gdigrab"):
+            cmd += ["-framerate", str(VIDEO_FPS),
+                    "-video_size", f"{VIDEO_WIDTH}x{VIDEO_HEIGHT}"]
+        cmd += ["-f", input_format, "-i", source]
+    else:
+        # File / URL / live stream -> loop forever, read at native pace
+        cmd += ["-stream_loop", "-1"]
+        if str(source).startswith(("http://", "https://", "rtmp://", "rtsp://")):
+            cmd += ["-reconnect", "1", "-reconnect_streamed", "1",
+                    "-reconnect_delay_max", "2"]
+        cmd += ["-re", "-i", source]
+    cmd += [
+        "-an",
+        "-vf",
+        (f"scale={VIDEO_WIDTH}:{VIDEO_HEIGHT}:force_original_aspect_ratio=decrease,"
+         f"pad={VIDEO_WIDTH}:{VIDEO_HEIGHT}:(ow-iw)/2:(oh-ih)/2,format=yuv420p"),
+        "-r", str(VIDEO_FPS),
+        "-f", "rawvideo",
+        "-pix_fmt", "yuv420p",
+        "pipe:1",
+    ]
+    return cmd
+
+
+async def _video_pump(chat_id, field, device):
+    """Read raw frames from ffmpeg and push them into the voice chat."""
+    cfg = video_sources.get(field, {})
+    source = cfg.get("source", "")
+    input_format = cfg.get("format", "")
+    # No source configured -> _build_video_command streams a solid black screen.
+    frame_size = VIDEO_WIDTH * VIDEO_HEIGHT * 3 // 2
+    frame_info = Frame.Info(width=VIDEO_WIDTH, height=VIDEO_HEIGHT)
+    logger.info(f"🎥 {field} ʀᴇʟᴀʏ ꜱᴛᴀʀᴛᴇᴅ -> {chat_id}")
+    try:
+        while chat_id in forward_chats:
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    *_build_video_command(source, input_format),
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.DEVNULL,
+                )
+            except FileNotFoundError:
+                logger.error("ffmpeg ɴᴏᴛ ɪɴꜱᴛᴀʟʟᴇᴅ")
+                return
+            errors = 0
+            try:
+                while chat_id in forward_chats:
+                    try:
+                        data = await proc.stdout.readexactly(frame_size)
+                    except asyncio.IncompleteReadError:
+                        break  # source ended -> restart / loop
+                    try:
+                        await call_py.send_frame(chat_id, device, data, frame_info)
+                        errors = 0
+                    except Exception as e:
+                        errors += 1
+                        if errors == 1:
+                            logger.debug(f"ᴠɪᴅᴇᴏ ꜱᴇɴᴅ ᴇʀʀ {chat_id}/{field}: {e}")
+                        if errors > max(VIDEO_FPS * 3, 30):
+                            logger.warning(
+                                f"ᴠɪᴅᴇᴏ ꜱᴛᴏᴘᴘᴇᴅ (ᴛᴏᴏ ᴍᴀɴʏ ᴇʀʀᴏʀꜱ) {field}@{chat_id}")
+                            return
+                        await asyncio.sleep(0.05)
+            finally:
+                try:
+                    proc.kill()
+                except Exception:
+                    pass
+                try:
+                    await proc.wait()
+                except Exception:
+                    pass
+            if chat_id in forward_chats:
+                await asyncio.sleep(0.5)
+    except asyncio.CancelledError:
+        raise
+    finally:
+        logger.info(f"🎥 {field} ʀᴇʟᴀʏ ꜱᴛᴏᴘᴘᴇᴅ -> {chat_id}")
+
+
+def _build_stream(chat_id):
+    st = video_state.get(chat_id, {})
+    return Stream(
+        microphone=AudioStream(MediaSource.EXTERNAL, "", AUDIO_PARAMETERS),
+        camera=(VideoStream(MediaSource.EXTERNAL, "", VIDEO_PARAMETERS)
+                if st.get("camera") else None),
+        screen=(VideoStream(MediaSource.EXTERNAL, "", VIDEO_PARAMETERS)
+                if st.get("screen") else None),
+    )
+
+
+async def _apply_video_state(chat_id):
+    """Re-negotiate the stream in-place. The external microphone is always kept,
+    so audio never stops; only camera/screen tracks are added or removed."""
+    await call_py.play(chat_id, _build_stream(chat_id))
+
+
+async def start_video(chat_id, fields):
+    async with video_lock:
+        st = video_state.setdefault(chat_id, {"screen": False, "camera": False})
+        for f in fields:
+            st[f] = True
+        await _apply_video_state(chat_id)
+        for f in fields:
+            key = (chat_id, f)
+            old = video_relays.get(key)
+            if old and not old.done():
+                old.cancel()
+            video_relays[key] = asyncio.create_task(
+                _video_pump(chat_id, f, FIELD_DEVICE[f]))
+
+
+async def stop_video(chat_id, fields):
+    async with video_lock:
+        st = video_state.setdefault(chat_id, {"screen": False, "camera": False})
+        for f in fields:
+            task = video_relays.pop((chat_id, f), None)
+            if task and not task.done():
+                task.cancel()
+            st[f] = False
+        try:
+            await _apply_video_state(chat_id)
+        except Exception as e:
+            logger.debug(f"ꜱᴛᴏᴘ ᴠɪᴅᴇᴏ ʀᴇ-ɴᴇɢᴏᴛɪᴀᴛᴇ ᴇʀʀ {chat_id}: {e}")
+
+
+async def stop_all_video(chat_id):
+    await stop_video(chat_id, ("screen", "camera"))
+
+
+def _cleanup_video_tasks(chat_id):
+    for f in ("screen", "camera"):
+        task = video_relays.pop((chat_id, f), None)
+        if task and not task.done():
+            task.cancel()
+    video_state.pop(chat_id, None)
+
+
+def _cleanup_all_video():
+    for _key, task in list(video_relays.items()):
+        if task and not task.done():
+            task.cancel()
+    video_relays.clear()
+    video_state.clear()
+
+
+async def _get_title(cid):
+    if cid in chat_titles:
+        return chat_titles[cid]
+    title = str(cid)
+    try:
+        chat = await user_app.get_chat(cid)
+        title = getattr(chat, "title", None) or getattr(chat, "first_name", None) or str(cid)
+    except Exception:
+        pass
+    chat_titles[cid] = title
+    return title
+
+
+async def _prefetch_titles():
+    for cid in list(forward_chats):
+        await _get_title(cid)
+
+
+async def _video_menu_keyboard(kind):
+    fields = KIND_TO_FIELDS[kind]
+    buttons = []
+    for cid in list(forward_chats):
+        st = video_state.get(cid, {})
+        active = all(st.get(f) for f in fields)
+        title = chat_titles.get(cid, str(cid))
+        label = f"{'🟢' if active else '⚪'} {title}"
+        if len(label) > 42:
+            label = label[:41] + "…"
+        buttons.append((label, f"media_{kind}_tog_{cid}",
+                        ButtonStyle.SUCCESS if active else ButtonStyle.PRIMARY))
+    buttons.append(("🛑 ꜱᴛᴏᴘ ᴀʟʟ", f"media_{kind}_stopall_0", ButtonStyle.DANGER))
+    buttons.append(("🔄 ʀᴇꜰʀᴇꜱʜ", f"media_{kind}_refresh_0", ButtonStyle.PRIMARY))
+    buttons.append(("❌ ᴄʟᴏꜱᴇ", "media_close_x_0", ButtonStyle.DANGER))
+    return build_keyboard(buttons, row_width=1)
+
+
+def _video_status_text(kind):
+    fields = KIND_TO_FIELDS[kind]
+    active = [cid for cid in forward_chats
+             if all(video_state.get(cid, {}).get(f) for f in fields)]
+    src_lines = []
+    for f in fields:
+        cfg = video_sources.get(f, {})
+        if cfg.get("source") and cfg.get("format"):
+            s = f"[{cfg['format']}] {cfg['source']}"
+        elif cfg.get("source"):
+            s = cfg["source"]
+        elif cfg.get("format"):
+            s = f"[{cfg['format']}] capture"
+        else:
+            s = "⬛ ʙʟᴀᴄᴋ ꜱᴄʀᴇᴇɴ (ᴅᴇꜰᴀᴜʟᴛ)"
+        src_lines.append(f"• **{f}:** `{s}`")
+    return (
+        f"🎥 **{KIND_LABEL[kind]} ᴄᴏɴᴛʀᴏʟ**\n"
+        f"────────────────────\n"
+        f"📡 **ᴄᴏɴɴᴇᴄᴛᴇᴅ ᴄʜᴀᴛꜱ:** {len(forward_chats)}\n"
+        f"🟢 **ᴀᴄᴛɪᴠᴇ:** {len(active)}\n"
+        f"🖼️ **ᴏᴜᴛᴘᴜᴛ:** {VIDEO_WIDTH}x{VIDEO_HEIGHT} @ {VIDEO_FPS}ꜰᴘꜱ\n"
+        + "\n".join(src_lines) +
+        "\n────────────────────\n"
+        "👇 **ᴛᴀᴘ ᴀ ᴄʜᴀᴛ ᴛᴏ ᴛᴏɢɢʟᴇ** (🟢 ᴏɴ · ⚪ ᴏꜰꜰ)\n"
+        "🎵 **ᴀᴜᴅɪᴏ ᴋᴇᴇᴘꜱ ᴘʟᴀʏɪɴɢ ᴡʜɪʟᴇ ʏᴏᴜ ᴛᴏɢɢʟᴇ.**"
+    )
+
+
+async def _send_video_menu(message, kind):
+    fields = KIND_TO_FIELDS[kind]
+    if not forward_chats:
+        await message.reply(
+            "📭 **ɴᴏ ᴄᴏɴɴᴇᴄᴛᴇᴅ ᴄʜᴀᴛꜱ!**\n\n"
+            "💡 ᴜꜱᴇ `/join <ᴄʜᴀᴛ_ɪᴅ>` ꜰɪʀꜱᴛ.")
+        return
+    parts = message.text.split()
+    arg = parts[1].lower() if len(parts) > 1 else None
+    await _prefetch_titles()
+    if arg in ("on", "off"):
+        if arg == "on" and not all(_video_source_ready(f) for f in fields):
+            await message.reply(
+                "⚠️ **ᴠɪᴅᴇᴏ ꜱᴏᴜʀᴄᴇ ɴᴏᴛ ꜱᴇᴛ!**\n\n"
+                "ᴜꜱᴇ `/setvideo <screen|camera> <source>` ꜰɪʀꜱᴛ.")
+            return
+        ok = fail = 0
+        for cid in list(forward_chats):
+            try:
+                await (start_video if arg == "on" else stop_video)(cid, fields)
+                ok += 1
+            except Exception as e:
+                fail += 1
+                logger.debug(f"ʙᴜʟᴋ {arg} {kind} {cid}: {e}")
+        await message.reply(
+            f"{'▶️' if arg == 'on' else '🛑'} **{KIND_LABEL[kind]} {arg.upper()}** "
+            f"— ✅ {ok} · ❌ {fail}",
+            reply_markup=await _video_menu_keyboard(kind))
+        return
+    await message.reply(_video_status_text(kind),
+                        reply_markup=await _video_menu_keyboard(kind))
+
+
+async def _refresh_video_menu(callback_query, kind):
+    await _prefetch_titles()
+    try:
+        await callback_query.edit_message_text(
+            _video_status_text(kind),
+            reply_markup=await _video_menu_keyboard(kind))
+    except Exception as e:
+        logger.debug(f"ᴠɪᴅᴇᴏ ᴍᴇɴᴜ ʀᴇꜰʀᴇꜱʜ ꜰᴀɪʟᴇᴅ: {e}")
+
+
+@bot_app.on_message(pyro_filters.command("screenshare") & authorized_only())
+async def cmd_screenshare(client, message):
+    """ꜱᴄʀᴇᴇɴ ꜱʜᴀʀᴇ ᴄᴏɴᴛʀᴏʟ ᴍᴇɴᴜ (/screenshare [on|off])"""
+    await _send_video_menu(message, "scr")
+
+
+@bot_app.on_message(pyro_filters.command("camera") & authorized_only())
+async def cmd_camera(client, message):
+    """ᴄᴀᴍᴇʀᴀ ꜱᴛʀᴇᴀᴍ ᴄᴏɴᴛʀᴏʟ ᴍᴇɴᴜ (/camera [on|off])"""
+    await _send_video_menu(message, "cam")
+
+
+@bot_app.on_message(pyro_filters.command("screencamera") & authorized_only())
+async def cmd_screencamera(client, message):
+    """ꜱᴄʀᴇᴇɴ + ᴄᴀᴍᴇʀᴀ ᴄᴏɴᴛʀᴏʟ ᴍᴇɴᴜ (/screencamera [on|off])"""
+    await _send_video_menu(message, "both")
+
+
+@bot_app.on_message(pyro_filters.command("setvideo") & pyro_filters.user(OWNER_ID))
+async def cmd_setvideo(client, message):
+    """ꜱᴇᴛ ᴛʜᴇ ᴠɪᴅᴇᴏ ꜱᴏᴜʀᴄᴇ ꜰᴏʀ ꜱᴄʀᴇᴇɴ / ᴄᴀᴍᴇʀᴀ ʀᴇʟᴀʏ"""
+    parts = message.text.split(maxsplit=2)
+    if len(parts) < 3 or parts[1].lower() not in ("screen", "camera"):
+        cur = "\n".join(
+            f"• **{k}:** `{(v.get('source') or ('[' + v['format'] + '] capture' if v.get('format') else 'ɴᴏᴛ ꜱᴇᴛ'))}`"
+            for k, v in video_sources.items())
+        await message.reply(
+            "❌ **ᴜꜱᴀɢᴇ:** `/setvideo <screen|camera> <source>`\n\n"
+            "📌 **source** ᴄᴀɴ ʙᴇ:\n"
+            "• ᴀ ꜰɪʟᴇ ᴘᴀᴛʜ ᴏʀ ʜᴛᴛᴘ(ꜱ)/ʀᴛᴍᴘ/ʀᴛꜱᴘ ᴜʀʟ\n"
+            "• `format:<fmt>:<input>` ꜰᴏʀ ᴀ ᴄᴀᴘᴛᴜʀᴇ ᴅᴇᴠɪᴄᴇ\n"
+            "  (ᴇ.ɢ. `format:x11grab::0.0`, `format:v4l2:/dev/video0`)\n\n"
+            f"📊 **ᴄᴜʀʀᴇɴᴛ:**\n{cur}")
+        return
+    field = parts[1].lower()
+    value = parts[2].strip()
+    if value.startswith("format:"):
+        try:
+            _, fmt, inp = value.split(":", 2)
+        except ValueError:
+            await message.reply("❌ **ʙᴀᴅ ꜱᴘᴇᴄ.** ᴜꜱᴇ `format:<fmt>:<input>`")
+            return
+        video_sources[field] = {"source": inp, "format": fmt}
+    else:
+        video_sources[field] = {"source": value, "format": ""}
+    await message.reply(
+        f"✅ **{field} ᴠɪᴅᴇᴏ ꜱᴏᴜʀᴄᴇ ᴜᴘᴅᴀᴛᴇᴅ!**\n\n`{value}`\n\n"
+        "💡 ʀᴇ-ᴛᴏɢɢʟᴇ ᴀɴʏ ᴀᴄᴛɪᴠᴇ ʀᴇʟᴀʏ ꜰᴏʀ ᴛʜɪꜱ ᴛᴏ ᴛᴀᴋᴇ ᴇꜰꜰᴇᴄᴛ.")
+
+
+@bot_app.on_callback_query(pyro_filters.regex(r"^media_"))
+async def media_callbacks(client, callback_query: CallbackQuery):
+    """ʜᴀɴᴅʟᴇ media_* (ꜱᴄʀᴇᴇɴ / ᴄᴀᴍᴇʀᴀ) ᴄᴀʟʟʙᴀᴄᴋ Qᴜᴇʀɪᴇꜱ"""
+    user_id = callback_query.from_user.id
+    if user_id != OWNER_ID and user_id not in approved_users:
+        await callback_query.answer("⛔ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ!", show_alert=True)
+        return
+    parts = (callback_query.data or "").split("_", 3)
+    if len(parts) < 4:
+        await callback_query.answer()
+        return
+    _, kind, action, cid_str = parts
+    if kind == "close":
+        try:
+            await callback_query.message.delete()
+        except Exception:
+            pass
+        await callback_query.answer("✅ ᴄʟᴏꜱᴇᴅ")
+        return
+    if kind not in KIND_TO_FIELDS:
+        await callback_query.answer()
+        return
+    fields = KIND_TO_FIELDS[kind]
+    if action == "refresh":
+        await callback_query.answer("🔄")
+        await _refresh_video_menu(callback_query, kind)
+        return
+    if action == "stopall":
+        for cid in list(forward_chats):
+            try:
+                await stop_video(cid, fields)
+            except Exception as e:
+                logger.debug(f"ꜱᴛᴏᴘᴀʟʟ {kind} {cid}: {e}")
+        await callback_query.answer("🛑 ꜱᴛᴏᴘᴘᴇᴅ ᴀʟʟ", show_alert=True)
+        await _refresh_video_menu(callback_query, kind)
+        return
+    if action == "tog":
+        try:
+            cid = int(cid_str)
+        except ValueError:
+            await callback_query.answer("⚠️ ʙᴀᴅ ᴄʜᴀᴛ ɪᴅ", show_alert=True)
+            return
+        if cid not in forward_chats:
+            await callback_query.answer("⚠️ ᴄʜᴀᴛ ɴᴏ ʟᴏɴɢᴇʀ ᴄᴏɴɴᴇᴄᴛᴇᴅ", show_alert=True)
+            await _refresh_video_menu(callback_query, kind)
+            return
+        st = video_state.get(cid, {})
+        active = all(st.get(f) for f in fields)
+        try:
+            if active:
+                await stop_video(cid, fields)
+                await callback_query.answer(f"🛑 {KIND_LABEL[kind]} ꜱᴛᴏᴘᴘᴇᴅ")
+            else:
+                if not all(_video_source_ready(f) for f in fields):
+                    await callback_query.answer(
+                        "⚠️ ᴠɪᴅᴇᴏ ꜱᴏᴜʀᴄᴇ ɴᴏᴛ ꜱᴇᴛ. ᴜꜱᴇ /setvideo", show_alert=True)
+                    return
+                await start_video(cid, fields)
+                await callback_query.answer(f"▶️ {KIND_LABEL[kind]} ꜱᴛᴀʀᴛᴇᴅ")
+        except Exception as e:
+            logger.error(f"ᴠɪᴅᴇᴏ ᴛᴏɢɢʟᴇ ᴇʀʀ {cid}/{kind}: {e}")
+            await callback_query.answer(f"❌ {str(e)[:150]}", show_alert=True)
+        await _refresh_video_menu(callback_query, kind)
+        return
+    await callback_query.answer()
+
+
 # ==================== ᴄᴏᴍᴍᴀɴᴅꜱ ====================
 
 # ===== ᴜꜱᴇʀ ᴍᴀɴᴀɢᴇᴍᴇɴᴛ ᴄᴏᴍᴍᴀɴᴅꜱ =====
@@ -825,9 +1273,9 @@ def build_keyboard(buttons: list, row_width: int = 2) -> InlineKeyboardMarkup:
 
 # ==================== ᴄᴀʟʟʙᴀᴄᴋ ʜᴀɴᴅʟᴇʀꜱ ====================
 
-@bot_app.on_callback_query(~pyro_filters.regex(r"^panel_"))
+@bot_app.on_callback_query(~pyro_filters.regex(r"^(panel_|media_)"))
 async def handle_callbacks(client, callback_query: CallbackQuery):
-    """ʜᴀɴᴅʟᴇ ᴀʟʟ ɴᴏɴ-ᴘᴀɴᴇʟ ᴄᴀʟʟʙᴀᴄᴋ Qᴜᴇʀɪᴇꜱ (ꜱᴇᴇ panel_callbacks ꜰᴏʀ panel_* ᴅᴀᴛᴀ)"""
+    """ʜᴀɴᴅʟᴇ ᴀʟʟ ɴᴏɴ-ᴘᴀɴᴇʟ ᴄᴀʟʟʙ���ᴄᴋ Qᴜᴇʀɪᴇꜱ (ꜱᴇᴇ panel_callbacks ꜰᴏʀ panel_* ᴅᴀᴛᴀ)"""
     data = callback_query.data
     user_id = callback_query.from_user.id
     
@@ -946,6 +1394,12 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
 /mute - ᴍᴜᴛᴇ
 /unmute - ᴜɴᴍᴜᴛᴇ
 ────────────────────
+🎥 **ᴠɪᴅᴇᴏ ʀᴇʟᴀʏ**
+/screenshare - ꜱᴄʀᴇᴇɴ ꜱʜᴀʀᴇ ᴍᴇɴᴜ
+/camera - ᴄᴀᴍᴇʀᴀ ꜱᴛʀᴇᴀᴍ ᴍᴇɴᴜ
+/screencamera - ꜱᴄʀᴇᴇɴ + ᴄᴀᴍᴇʀᴀ ᴍᴇɴᴜ
+(ᴀᴅᴅ `on`/`off` ᴛᴏ ᴀᴘᴘʟʏ ᴛᴏ ᴀʟʟ ᴄʜᴀᴛꜱ)
+────────────────────
 🎛️ **ᴇꜰꜰᴇᴄᴛꜱ**
 /level <0-200> - ᴠᴏʟᴜᴍᴇ
 /bass <0-60> - ʙᴀꜱꜱ
@@ -967,6 +1421,7 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
 /disapprove - ʀᴇᴍᴏᴠᴇ
 /userlist - ʟɪꜱᴛ ᴜꜱᴇʀꜱ
 /setrecordgroup <ɪᴅ> - ᴄʜᴀɴɢᴇ ꜱᴏᴜʀᴄᴇ
+/setvideo <screen|camera> <src> - ᴠɪᴅᴇᴏ ꜱᴏᴜʀᴄᴇ
 /restart - ʀᴇꜱᴛᴀʀᴛ ʙᴏᴛ
 """
         keyboard = build_keyboard([
@@ -1131,6 +1586,12 @@ async def cmd_help(client, message):
 /mute - ᴍᴜᴛᴇ
 /unmute - ᴜɴᴍᴜᴛᴇ
 ────────────────────
+🎥 **ᴠɪᴅᴇᴏ ʀᴇʟᴀʏ**
+/screenshare - ꜱᴄʀᴇᴇɴ ꜱʜᴀʀᴇ ᴍᴇɴᴜ
+/camera - ᴄᴀᴍᴇʀᴀ ꜱᴛʀᴇᴀᴍ ᴍᴇɴᴜ
+/screencamera - ꜱᴄʀᴇᴇɴ + ᴄᴀᴍᴇʀᴀ ᴍᴇɴᴜ
+(ᴀᴅᴅ `on`/`off` ᴛᴏ ᴀᴘᴘʟʏ ᴛᴏ ᴀʟʟ ᴄʜᴀᴛꜱ)
+────────────────────
 🎛️ **ᴇꜰꜰᴇᴄᴛꜱ**
 /level <0-200> - ᴠᴏʟᴜᴍᴇ
 /bass <0-60> - ʙᴀꜱꜱ
@@ -1152,6 +1613,7 @@ async def cmd_help(client, message):
 /disapprove - ʀᴇᴍᴏᴠᴇ
 /userlist - ʟɪꜱᴛ ᴜꜱᴇʀꜱ
 /setrecordgroup <ɪᴅ> - ᴄʜᴀɴɢᴇ ꜱᴏᴜʀᴄᴇ
+/setvideo <screen|camera> <src> - ᴠɪᴅᴇᴏ ꜱᴏᴜʀᴄᴇ
 /restart - ʀᴇꜱᴛᴀʀᴛ ʙᴏᴛ
 """
     keyboard = build_keyboard([
@@ -1180,7 +1642,7 @@ async def cmd_id(client, message):
 📝 **ᴛɪᴛʟᴇ:** {message.chat.title or 'ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ'}
 ────────────────────
 
-✅ **ᴄᴏᴘʏ ᴛʜɪꜱ ɪᴅ ꜰᴏʀ ᴜꜱᴇ ɪɴ ᴄᴏᴍᴍᴀɴᴅꜱ**
+✅ **ᴄᴏᴘʏ ᴛʜɪꜱ ɪ�� ꜰᴏʀ ᴜꜱᴇ ɪɴ ᴄᴏᴍᴍᴀɴᴅꜱ**
 """
     await message.reply(id_msg)
 
@@ -1444,7 +1906,7 @@ async def cmd_rejoin(client, message):
     
     response += f"""
 ────────────────────
-📤 **ꜰᴏʀᴡᴀʀᴅ ꜱᴛᴀᴛᴜꜱ:**
+📤 **ꜰᴏʀᴡᴀʀᴅ ꜱᴛᴀᴛᴜ��:**
 • **ᴛᴏᴛᴀʟ:** {rejoin_results['forwards']['total']}
 • **✅ ꜱᴜᴄᴄᴇꜱꜱ:** {rejoin_results['forwards']['success']}
 • **❌ ꜰᴀɪʟᴇᴅ:** {rejoin_results['forwards']['failed']}
@@ -1482,7 +1944,7 @@ async def cmd_leaverecord(client, message):
         await call_py.leave_call(RECORD_SOURCE)
         is_recording = False
         leave_msg = f"""
-✅ **ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ ɢʀᴏᴜᴘ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**
+��� **ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ ɢʀᴏᴜᴘ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**
 
 ────────────────────
 📡 **ꜱᴏᴜʀᴄᴇ:** `{RECORD_SOURCE}`
@@ -1514,19 +1976,20 @@ async def cmd_leave(client, message):
             return
         if chat_id not in forward_chats:
             await message.reply(
-                f"⚠️ **ɴᴏᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ ᴛᴏ ᴛʜɪꜱ ᴄʜᴀᴛ!**\n\n🎯 `{chat_id}`"
+                f"⚠️ **ɴᴏᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ ᴛᴏ ᴛʜɪꜱ ᴄʜᴀᴛ!**\n\n���� `{chat_id}`"
             )
             return
         try:
             status_msg = await message.reply(f"🔄 **ʟᴇᴀᴠɪɴɢ `{chat_id}`...**")
             await call_py.leave_call(chat_id)
             forward_chats.discard(chat_id)
+            _cleanup_video_tasks(chat_id)
             leave_msg = f"""
 ✅ **ʟᴇꜰᴛ ᴄʜᴀᴛ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**
 
 ────────────────────
 🎯 **ᴄʜᴀᴛ:** `{chat_id}`
-📤 **ʀᴇᴍᴀɪɴɪɴɢ ꜰᴏʀᴡᴀʀᴅɪɴɢ:** {len(forward_chats)}
+📤 **ʀᴇᴍᴀɪɴɪɴɢ ���ᴏʀᴡᴀʀᴅɪɴɢ:** {len(forward_chats)}
 📊 **ꜱᴛᴀᴛᴜꜱ:** 🔴 ᴅɪꜱᴄᴏɴɴᴇᴄᴛᴇᴅ
 ────────────────────
 
@@ -1552,6 +2015,7 @@ async def cmd_leave(client, message):
                 left_count += 1
             except Exception:
                 pass
+        _cleanup_all_video()
         forward_chats.clear()
         leave_msg = f"""
 ✅ **ʟᴇꜰᴛ ᴀʟʟ ᴄʜᴀᴛꜱ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**
@@ -1586,6 +2050,7 @@ async def cmd_leaveall(client, message):
             left_count += 1
         except Exception:
             pass
+    _cleanup_all_video()
     forward_chats.clear()
     leaveall_msg = f"""
 ✅ **ᴀʟʟ ᴄʜᴀᴛꜱ ᴅɪꜱᴄᴏɴɴᴇᴄᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**
@@ -2082,6 +2547,7 @@ async def cmd_restart(client, message):
                 logger.debug(f"ᴄᴏᴜʟᴅ ɴᴏᴛ ʟᴇᴀᴠᴇ {chat_id}: {e}")
         
         # ===== 3. CLEAR STATE =====
+        _cleanup_all_video()
         forward_chats = set()  # Reassign instead of clear
         is_recording = False
         is_muted = False
