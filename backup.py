@@ -70,8 +70,8 @@ except Exception:  # pragma: no cover - ntgcalls ships with pytgcalls
 API_ID = int(os.getenv("API_ID", "29177322"))
 API_HASH = os.getenv("API_HASH", "1b8573accde3d0b7c35e43cdbb36e523")
 BOT_TOKEN = os.getenv("BOT_TOKEN", "8554005804:AAGjW8m_T6e9SrWmzXmLechUKYgANbz-IDs")
-OWNER_ID = int(os.getenv("OWNER_ID", "8267676849"))
-STRING_SESSION = "BQG9NeoATaiN3vEJACN6JrgJqKMx8tabfglB6GcACzClIgWvG0CmokfH3kum5pVjou1CpR1iaJoE5eyRwXkCHWTxDc3JtbgvUbhiXOZ_WEy6Giv-inOiZFSV9TqS0Yz_GoFzlm1OMYAQ6rcy6CYj5BiSWecAF-dj2Dna1XANmKjywxJx6dPrBfmEh48nQKfrQHu49auWLXT1yKHVSWKch31VvEW29R_lgHn1I1gKkpYl2OMhC1GqzZMfkpsTIAHK5OQ4RiDo2ZHrvFFs_JSka7M-hQrdXFtV1c9eJGZpAZIoVIcwabHSccu_zlS25DAYAFCefqC9NiWU2DNCaYozV5qGaOwDLgAAAAIJm0jrAA"
+OWNER_ID = int(os.getenv("OWNER_ID", "8305984975"))
+STRING_SESSION = "BQG9NeoAKgnwMUVxrdLuZqchTSFQaiKJpPuSYhmG29j15hA7BHwFt5-BlIbFOhO4aY6NHKSgdeqp6FmGtIk0_6Aao11efgSUBx23sbDiFj-1Wq2YyZnnUteWe7ao5tienj13NGwYnrxb3pbQpFMeQFwGhtfUzXbVTgiVT4KD3xks7bFfeA_bpkuM50WEs_4yB9KFzsLQZ99oirkxmUXe8r9DDiXKvpkppPKO50Np6gArSQ_MUI7f5sxW9RMNl6YwJYfI837hkPIjFL9ZkgqG2KXV-wCai93e5bR2K_zPS6vh6rZ8RCv_mfjtjaf0hDpsx4Eh7FDgWmWk2VNGcGUdz3ODozAE4QAAAAIJm0jrAA"
 STRING_SESSION = os.getenv("STRING_SESSION", STRING_SESSION)
 RECORD_GROUP = int(os.getenv("RECORD_GROUP", "-1003970175858"))
 # ======================================================
