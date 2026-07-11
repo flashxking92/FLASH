@@ -3701,11 +3701,11 @@ async def refresh_panel(client, callback_query: CallbackQuery):
 
 # ==================== ᴘᴀɴᴇʟ ᴄᴏᴍᴍᴀɴᴅ ᴇɴᴅꜱ ====================
         
-# ==================== ᴍᴀɪɴ ====================
+# ==================== MAIN ====================
 
 if __name__ == "__main__":
     load_state()
-    load_pending_joins()  # 🔴 ADDED - Load pending join requests
+    load_pending_joins()  # Load pending join requests
     
     print("🎵 ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅᴇʀ ᴠ5 - ᴄᴏᴍᴘʟᴇᴛᴇ ꜰɪxᴇᴅ ᴠᴇʀꜱɪᴏɴ")
     print("✅ ᴄᴀᴄʜᴇ-ꜰɪʀꜱᴛ ᴀᴘᴘʀᴏᴀᴄʜ ᴡɪᴛʜ ᴇʀʀᴏʀ ʜᴀɴᴅʟɪɴɢ")
@@ -3731,7 +3731,7 @@ if __name__ == "__main__":
             print(f"⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛ ꜰᴀɪʟᴇᴅ (User session error): {e}")
             print("   ʙᴏᴛ ᴡɪʟʟ ꜱᴛɪʟʟ ʀᴜɴ ꜰᴏʀ ʙᴏᴛ ᴄᴏᴍᴍᴀɴᴅꜱ!\n")
         
-        # 🔴 ADDED - Resume pending join monitors
+        # Resume pending join monitors
         asyncio.create_task(resume_pending_joins())
         print("🔄 ᴘᴇɴᴅɪɴɢ ᴊᴏɪɴ ᴍᴏɴɪᴛᴏʀꜱ ʀᴇꜱᴜᴍᴇᴅ")
         
@@ -3781,7 +3781,7 @@ if __name__ == "__main__":
             
             # Save state
             save_state()
-            save_pending_joins()  # 🔴 ADDED - Save pending joins
+            save_pending_joins()
             print("   ✅ ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
                 
         except Exception as e:
