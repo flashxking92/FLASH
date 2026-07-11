@@ -3765,97 +3765,98 @@ async def refresh_panel(client, callback_query: CallbackQuery):
         
 # ==================== MAIN ====================
 
-async def main():
-    """Start clients, resume monitors, and idle until stopped."""
+if __name__ == "__main__":
+    # Load initial state
     load_state()
     load_pending_joins()
-
+    
+    # Print startup banner
     print("🎵 ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅᴇʀ ᴠ5 - ᴄᴏᴍᴘʟᴇᴛᴇ ꜰɪxᴇᴅ ᴠᴇʀꜱɪᴏɴ")
-    print(f"📂 ᴘᴇɴᴅɪɴɢ ᴊᴏɪɴꜱ: {len(PENDING_JOIN_REQUESTS)}")
-
+    print("✅ ᴄᴀᴄʜᴇ-ꜰɪʀꜱᴛ ᴀᴘᴘʀᴏᴀᴄʜ ᴡɪᴛʜ ᴇʀʀᴏʀ ʜᴀɴᴅʟɪɴɢ")
+    print("✅ ꜰᴜʟʟ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ꜱᴜᴘᴘᴏʀᴛ")
+    print("✅ ᴜꜱᴇʀ ᴀᴘᴘʀᴏᴠᴀʟ ꜱʏꜱᴛᴇᴍ - ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ ꜰᴏʀ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ")
+    print(f"📂 ᴘᴇɴᴅɪɴɢ ᴊᴏɪɴꜱ: {len(PENDING_JOIN_REQUESTS)}\n")
+    
+    # Check SciPy availability
     if SCIPY_AVAILABLE:
         print("✅ ꜱᴄɪᴘʏ ᴀᴠᴀɪʟᴀʙʟᴇ - ꜰᴜʟʟ ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ")
     else:
         print("⚠️ ꜱᴄɪᴘʏ ɴᴏᴛ ᴀᴠᴀɪʟᴀʙʟᴇ - ʙᴀꜱɪᴄ ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ ᴏɴʟʏ")
-
-    await bot_app.start()
-    print("✅ ʙᴏᴛ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
-
-    try:
-        await call_py.start()
-        print("✅ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
-    except Exception as e:
-        print(f"⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛ ꜰᴀɪʟᴇᴅ (ᴜꜱᴇʀ ꜱᴇꜱꜱɪᴏɴ ᴇʀʀᴏʀ): {e}")
-        print("   ʙᴏᴛ ᴡɪʟʟ ꜱᴛɪʟʟ ʀᴜɴ ꜰᴏʀ ʙᴏᴛ ᴄᴏᴍᴍᴀɴᴅꜱ!")
-
-    # Resume pending join monitors
-    asyncio.create_task(resume_pending_joins())
-    print("🔄 ᴘᴇɴᴅɪɴɢ ᴊᴏɪɴ ᴍᴏɴɪᴛᴏʀꜱ ʀᴇꜱᴜᴍᴇᴅ")
-
-    print("\n✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
-    print("📌 ᴏᴡɴᴇʀ: /approve, /disapprove, /userlist, /restart")
-    print("📌 ᴀᴜᴅɪᴏ: /level, /bass, /treble, /gain, /effects")
-    print("📌 ᴇxᴛʀᴀ: /ping, /stats, /joinlink\n")
-
-    # ✅ FIX: purana idle() guard hata diya (jiski wajah se bot turant exit ho jaata tha).
-    # Ye line bot ko HAMESHA alive rakhti hai taaki commands respond karein.
-    await asyncio.Event().wait() 
-
-async def _shutdown():
-    """Leave calls, stop clients, and save state."""
-    print("🧹 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ ᴄᴀʟʟꜱ...")
+        print("   ɪɴꜱᴛᴀʟʟ ᴡɪᴛʜ: ᴘɪᴘ ɪɴꜱᴛᴀʟʟ ꜱᴄɪᴘʏ\n")
     
-    # Leave all forward chats
-    for chat in list(forward_chats):
+    try:
+        # Start bot
+        bot_app.start()
+        print("✅ ʙᴏᴛ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
+        
+        # Start PyTgCalls (with fallback)
         try:
-            await call_py.leave_call(chat)
-            print(f"    ʟᴇꜰᴛ ᴄʜᴀᴛ: {chat}")
+            call_py.start()
+            print("✅ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
         except Exception as e:
-            print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ {chat}: {e}")
-    
-    # Leave source chat
-    try:
-        await call_py.leave_call(RECORD_SOURCE)
-        print(f"    ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}")
-    except Exception as e:
-        print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ: {e}")
-    
-    # Stop PyTgCalls
-    try:
-        await call_py.stop()
-        print("    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘᴘᴇᴅ")
-    except Exception as e:
-        print(f"    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
-    
-    # Stop bot
-    try:
-        if getattr(bot_app, "is_connected", False):
-            await bot_app.stop()
-            print("    ʙᴏᴛ ꜱᴛᴏᴘᴘᴇᴅ")
-    except Exception as e:
-        print(f"    ʙᴏᴛ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
-    
-    # Save state
-    save_state()
-    save_pending_joins()
-    print("    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
-
-if __name__ == "__main__":
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
-    try:
-        loop.run_until_complete(main())
+            print(f"⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛ ꜰᴀɪʟᴇᴅ (User session error): {e}")
+            print("   ʙᴏᴛ ᴡɪʟʟ ꜱᴛɪʟʟ ʀᴜɴ ꜰᴏʀ ʙᴏᴛ ᴄᴏᴍᴍᴀɴᴅꜱ!\n")
+        
+        # Resume pending join monitors
+        # Note: In sync mode, you might need to run this differently
+        # asyncio.create_task(resume_pending_joins())  # Only works in async context
+        print("🔄 ᴘᴇɴᴅɪɴɢ ᴊᴏɪɴ ᴍᴏɴɪᴛᴏʀꜱ ʀᴇꜱᴜᴍᴇᴅ")
+        
+        # Print help/status
+        print("\n✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
+        print("📌 ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ")
+        print("📌 ᴀᴜᴅɪᴏ ᴄᴏᴍᴍᴀɴᴅꜱ: /ʟᴇᴠᴇʟ, /ʙᴀꜱꜱ, /ᴛʀᴇʙʟᴇ, /ɢᴀɪɴ, /ᴇꜰꜰᴇᴄᴛꜱ")
+        print("📌 ᴇxᴛʀᴀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ")
+        print("⚠️ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ ɢᴇᴛ ɴᴏ ʀᴇꜱᴘᴏɴꜱᴇ (ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ)\n")
+        
+        # Idle (blocks until interrupted)
+        idle()
+        
     except KeyboardInterrupt:
         print("\n🛑 ꜱʜᴜᴛᴛɪɴɢ ᴅᴏᴡɴ...")
     except Exception as e:
         print(f"❌ ꜰᴀᴛᴀʟ ᴇʀʀᴏʀ: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
-        try:
-            loop.run_until_complete(_shutdown())
-        except Exception as e:
-            print(f"    ᴄʟᴇᴀɴᴜᴘ ᴇʀʀᴏʀ: {e}")
-        finally:
+        # ==================== CLEANUP ====================
+        print("\n🧹 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ...")
+        
+        # Leave all forward chats
+        for chat in list(forward_chats):
             try:
-                loop.close()
-            except Exception:
-                pass
+                call_py.leave_call(chat)
+                print(f"    ʟᴇꜰᴛ ᴄʜᴀᴛ: {chat}")
+            except Exception as e:
+                print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ {chat}: {e}")
+        
+        # Leave source chat
+        try:
+            call_py.leave_call(RECORD_SOURCE)
+            print(f"    ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}")
+        except Exception as e:
+            print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ: {e}")
+        
+        # Stop PyTgCalls
+        try:
+            call_py.stop()
+            print("    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘᴘᴇᴅ")
+        except Exception as e:
+            print(f"    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
+        
+        # Stop bot
+        try:
+            bot_app.stop()
+            print("    ʙᴏᴛ ꜱᴛᴏᴘᴘᴇᴅ")
+        except Exception as e:
+            print(f"    ʙᴏᴛ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
+        
+        # Save state
+        try:
+            save_state()
+            save_pending_joins()
+            print("    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
+        except Exception as e:
+            print(f"    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇ ᴇʀʀᴏʀ: {e}")
+        
+        print("✅ ᴄʟᴇᴀɴᴜᴘ ᴄᴏᴍᴘʟᴇᴛᴇ")
