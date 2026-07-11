@@ -3772,7 +3772,7 @@ async def main():
 
     print("🎵 ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅᴇʀ ᴠ5 - ᴄᴏᴍᴘʟᴇᴛᴇ ꜰɪxᴇᴅ ᴠᴇʀꜱɪᴏɴ")
     print(f"📂 ᴘᴇɴᴅɪɴɢ ᴊᴏɪɴꜱ: {len(PENDING_JOIN_REQUESTS)}")
-    
+
     if SCIPY_AVAILABLE:
         print("✅ ꜱᴄɪᴘʏ ᴀᴠᴀɪʟᴀʙʟᴇ - ꜰᴜʟʟ ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ")
     else:
@@ -3793,49 +3793,52 @@ async def main():
     print("🔄 ᴘᴇɴᴅɪɴɢ ᴊᴏɪɴ ᴍᴏɴɪᴛᴏʀꜱ ʀᴇꜱᴜᴍᴇᴅ")
 
     print("\n✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
-    print("📌 ᴏᴡɴᴇʀ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ")
-    print("📌 ᴀᴜᴅɪᴏ: /ʟᴇᴠᴇʟ, /ʙᴀꜱꜱ, /ᴛʀᴇʙʟᴇ, /ɢᴀɪɴ, /ᴇꜰꜰᴇᴄᴛꜱ")
-    print("📌 ᴇxᴛʀᴀ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ, /ᴊᴏɪɴʟɪɴᴋ\n")
+    print("📌 ᴏᴡɴᴇʀ: /approve, /disapprove, /userlist, /restart")
+    print("📌 ᴀᴜᴅɪᴏ: /level, /bass, /treble, /gain, /effects")
+    print("📌 ᴇxᴛʀᴀ: /ping, /stats, /joinlink\n")
 
-    _idle = idle()
-    if asyncio.iscoroutine(_idle):
-        await _idle
-
+    # ✅ FIX: purana idle() guard hata diya (jiski wajah se bot turant exit ho jaata tha).
+    # Ye line bot ko HAMESHA alive rakhti hai taaki commands respond karein.
+    await asyncio.Event().wait() 
 
 async def _shutdown():
     """Leave calls, stop clients, and save state."""
-    print("🔄 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ ᴄᴀʟʟꜱ...")
+    print("🧹 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ ᴄᴀʟʟꜱ...")
     
+    # Leave all forward chats
     for chat in list(forward_chats):
         try:
             await call_py.leave_call(chat)
-            print(f"   ✅ ʟᴇꜰᴛ ᴄʜᴀᴛ: {chat}")
+            print(f"    ʟᴇꜰᴛ ᴄʜᴀᴛ: {chat}")
         except Exception as e:
-            print(f"   ⚠️ ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ {chat}: {e}")
+            print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ {chat}: {e}")
     
+    # Leave source chat
     try:
         await call_py.leave_call(RECORD_SOURCE)
-        print(f"   ✅ ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}")
+        print(f"    ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}")
     except Exception as e:
-        print(f"   ⚠️ ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ: {e}")
+        print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ: {e}")
     
+    # Stop PyTgCalls
     try:
         await call_py.stop()
-        print("   ✅ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘᴘᴇᴅ")
+        print("    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘᴘᴇᴅ")
     except Exception as e:
-        print(f"   ⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
+        print(f"    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
     
+    # Stop bot
     try:
         if getattr(bot_app, "is_connected", False):
             await bot_app.stop()
-        print("   ✅ ʙᴏᴛ ꜱᴛᴏᴘᴘᴇᴅ")
+            print("    ʙᴏᴛ ꜱᴛᴏᴘᴘᴇᴅ")
     except Exception as e:
-        print(f"   ⚠️ ʙᴏᴛ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
+        print(f"    ʙᴏᴛ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
     
+    # Save state
     save_state()
     save_pending_joins()
-    print("   ✅ ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
-
+    print("    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
 
 if __name__ == "__main__":
     loop = asyncio.new_event_loop()
@@ -3850,7 +3853,7 @@ if __name__ == "__main__":
         try:
             loop.run_until_complete(_shutdown())
         except Exception as e:
-            print(f"   ❌ ᴄʟᴇᴀɴᴜᴘ ᴇʀʀᴏʀ: {e}")
+            print(f"    ᴄʟᴇᴀɴᴜᴘ ᴇʀʀᴏʀ: {e}")
         finally:
             try:
                 loop.close()
