@@ -29,7 +29,7 @@ warnings.filterwarnings("ignore", category=DeprecationWarning)
 try:
     from scipy import signal
     SCIPY_AVAILABLE = True
-except BaseException:
+except Exception:
     SCIPY_AVAILABLE = False
     print("⚠️ ꜱᴄɪᴘʏ ʟᴏᴀᴅ ꜰᴀɪʟᴇᴅ - ʙᴀꜱɪᴄ ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ ᴏɴʟʏ")
 
@@ -50,7 +50,6 @@ from pytgcalls.types import (
 )
 from pytgcalls.types.raw import AudioParameters
 from pytgcalls.exceptions import NoActiveGroupCall
-from pyrogram.raw import functions
 
 # ==================== ᴄᴏɴꜰɪɢᴜʀᴀᴛɪᴏɴ ====================
 # ⚠️ Credentials hardcoded directly (no environment variables).
@@ -122,10 +121,80 @@ PENDING_JOIN_MONITORS: Dict[str, asyncio.Task] = {}
 
 STATE_FILE = "bot_state.json"
 
+def save_pending_joins():
+    """Persist pending join requests to disk (atomic)."""
+    try:
+        tmp = f"{PENDING_JOIN_FILE}.tmp"
+        with open(tmp, "w") as f:
+            json.dump(PENDING_JOIN_REQUESTS, f, indent=2)
+        os.replace(tmp, PENDING_JOIN_FILE)
+    except Exception as e:
+        logger.error(f"Failed to save pending joins: {e}")
+
+def load_pending_joins():
+    """Load pending join requests from disk."""
+    try:
+        with open(PENDING_JOIN_FILE, "r") as f:
+            data = json.load(f)
+        if isinstance(data, dict):
+            PENDING_JOIN_REQUESTS.update(data)
+        logger.info(f"Loaded {len(PENDING_JOIN_REQUESTS)} pending join request(s)")
+    except FileNotFoundError:
+        logger.info("No pending joins found")
+    except Exception as e:
+        logger.error(f"Failed to load pending joins: {e}")
+
+async def _run_join_monitor(client, status_msg, invite_hash, original_link, start_time):
+    """Run the join monitor and clean up persisted state when done."""
+    try:
+        await monitor_join_approval(client, status_msg, invite_hash, original_link, start_time)
+    finally:
+        PENDING_JOIN_REQUESTS.pop(invite_hash, None)
+        PENDING_JOIN_MONITORS.pop(invite_hash, None)
+        save_pending_joins()
+
+async def resume_pending_joins():
+    """Resume monitors for any pending join requests after a restart."""
+    if not PENDING_JOIN_REQUESTS:
+        return
+    for invite_hash, info in list(PENDING_JOIN_REQUESTS.items()):
+        try:
+            original_link = info.get("original_link", invite_hash)
+            start_time = info.get("start_time", time.time())
+            chat_id = info.get("chat_id")
+            message_id = info.get("message_id")
+
+            status_msg = None
+            if chat_id is not None and message_id is not None:
+                try:
+                    status_msg = await bot_app.get_messages(chat_id, message_id)
+                except Exception:
+                    status_msg = None
+            if status_msg is None and chat_id is not None:
+                try:
+                    status_msg = await bot_app.send_message(
+                        chat_id,
+                        f"🔄 Resuming join monitor... 🔗 {original_link}",
+                    )
+                    info["message_id"] = status_msg.id
+                except Exception:
+                    status_msg = None
+            if status_msg is None:
+                continue
+
+            PENDING_JOIN_MONITORS[invite_hash] = asyncio.create_task(
+                _run_join_monitor(bot_app, status_msg, invite_hash, original_link, start_time)
+            )
+        except Exception as e:
+            logger.error(f"Failed to resume pending join {invite_hash}: {e}")
+    save_pending_joins()
+
+
 def save_state():
     """ᴘᴇʀꜱɪꜱᴛ ᴀᴘᴘʀᴏᴠᴇᴅ ᴜꜱᴇʀꜱ ᴀɴᴅ ᴀᴜᴅɪᴏ ᴄᴏɴꜰɪɢ ᴛᴏ ᴅɪꜱᴋ"""
     try:
-        with open(STATE_FILE, "w") as f:
+        tmp = f"{STATE_FILE}.tmp"
+        with open(tmp, "w") as f:
             json.dump({
                 "approved_users": sorted(approved_users),
                 "audio_config": audio_config,
@@ -133,6 +202,7 @@ def save_state():
                 "record_source": RECORD_SOURCE,
                 "forward_chats": sorted(forward_chats),
             }, f, indent=2)
+        os.replace(tmp, STATE_FILE)
     except Exception as e:
         logger.error(f"ꜰᴀɪʟᴇᴅ ᴛᴏ ꜱᴀᴠᴇ ꜱᴛᴀᴛᴇ: {e}")
 
@@ -206,11 +276,15 @@ def get_uptime():
 
 def create_progress_bar(value, max_val, length=12):
     """ᴄʀᴇᴀᴛᴇ ᴀ ᴠɪꜱᴜᴀʟ ᴘʀᴏɢʀᴇꜱꜱ ʙᴀʀ"""
+    if not max_val:
+        max_val = 1
     filled = int((value / max_val) * length)
     return "█" * filled + "░" * (length - filled)
 
 def get_effect_status(value, max_val):
     """ɢᴇᴛ ꜱᴛᴀᴛᴜꜱ ʙᴀꜱᴇᴅ ᴏɴ ᴠᴀʟᴜᴇ"""
+    if not max_val:
+        max_val = 1
     percentage = (value / max_val) * 100
     if percentage == 0:
         return "⚪ ᴏꜰꜰ"
@@ -470,6 +544,15 @@ def process_audio(audio_data):
         if config.get('lowpass', False) and SCIPY_AVAILABLE:
             try:
                 b, a = signal.butter(4, 16000 / 24000, btype='low')
+                processed = signal.lfilter(b, a, processed.astype(np.float32))
+                processed = np.clip(processed, -32768, 32767).astype(np.int16)
+            except Exception:
+                pass
+
+        # ===== HIGHPASS FILTER =====
+        if config.get('highpass', False) and SCIPY_AVAILABLE:
+            try:
+                b, a = signal.butter(2, 80 / 24000, btype='high')
                 processed = signal.lfilter(b, a, processed.astype(np.float32))
                 processed = np.clip(processed, -32768, 32767).astype(np.int16)
             except Exception:
@@ -844,8 +927,7 @@ def apply_advanced_effects(audio_data):
         
 # ==================== ᴀᴜᴅɪᴏ ʜᴀɴᴅʟᴇʀ ====================
 
-@call_py.on_update(pytg_filters.stream_frame(Direction.INCOMING, Device.MICROPHONE))
-async def audio_forwarder(_, update: StreamFrames):
+async def _forward_incoming_frames(update):
     if is_muted or update.chat_id != RECORD_SOURCE or not forward_chats:
         return
     async with processing_lock:
@@ -883,6 +965,11 @@ async def audio_forwarder(_, update: StreamFrames):
             logger.error(f"ᴀᴜᴅɪᴏ ʜᴀɴᴅʟᴇʀ ᴇʀʀᴏʀ: {e}")
 
 # ==================== ᴄʜᴀᴛ ᴍᴀɴᴀɢᴇᴍᴇɴᴛ ====================
+
+@call_py.on_update(pytg_filters.stream_frame(Direction.INCOMING, Device.MICROPHONE))
+async def audio_forwarder(_, update: StreamFrames):
+    await _forward_incoming_frames(update)
+
 
 async def cache_chat_info(chat_id):
     """ᴄᴀᴄʜᴇ ᴄʜᴀᴛ ɪɴꜰᴏ ᴡɪᴛʜ ᴘʀᴏᴘᴇʀ ᴇʀʀᴏʀ ʜᴀɴᴅʟɪɴɢ"""
@@ -1213,7 +1300,7 @@ def styled_button(text: str, callback_data: str = None, url: str = None, style: 
     return StyledInlineKeyboardButton(text=text, callback_data=callback_data, url=url, style=style)
 
 def build_keyboard(buttons: list, row_width: int = 2) -> InlineKeyboardMarkup:
-    """ʙᴜɪʟᴅ ᴋᴇʏʙᴏᴀʀᴅ ꜰʀᴏᴍ ʙuᴛᴛᴏɴ ᴅᴀᴛᴀ (ᴄᴏʟᴏʀ ꜱᴜᴘᴘᴏʀᴛᴇᴅ)"""
+    """ʙᴜɪʟᴅ ᴋᴇʏʙᴏᴀʀᴅ ꜰʀᴏᴍ ʙᴜᴛᴛᴏɴ ᴅᴀᴛᴀ (ᴄᴏʟᴏʀ ꜱᴜᴘᴘᴏʀᴛᴇᴅ)"""
     rows, row = [], []
     
     for btn in buttons:
@@ -2121,7 +2208,7 @@ async def cmd_level(client, message):
         bar = create_progress_bar(current, 200)
         await message.reply(
             f"🔊 **ᴠᴏʟᴜᴍᴇ ᴄᴏɴᴛʀᴏʟ**\n\n"
-            f"📊 **ᴄᴜʀʀᴇɴt:** `{current}%`\n"
+            f"📊 **ᴄᴜʀʀᴇɴᴛ:** `{current}%`\n"
             f"📈 {bar} `{current}%`\n"
             f"📌 **ꜱᴛᴀᴛᴜꜱ:** {get_effect_status(current, 200)}\n\n"
             f"💡 **ᴜꜱᴀɢᴇ:** `/level <0-200>`"
@@ -2625,7 +2712,7 @@ async def cmd_status(client, message):
 • ᴛʀᴇʙʟᴇ: `{audio_config['treble']}`
 • ɢᴀɪɴ: `{audio_config['gain']}`
 
-📊 **ꜱʏꜱᴛᴇM:** {'🟢 ꜱᴛᴀʙʟᴇ' if is_recording else '🟡 ꜱᴛᴀɴᴅʙʏ'}
+📊 **ꜱʏꜱᴛᴇᴍ:** {'🟢 ꜱᴛᴀʙʟᴇ' if is_recording else '🟡 ꜱᴛᴀɴᴅʙʏ'}
 """
     await message.reply(status_msg)
 
@@ -2803,42 +2890,8 @@ async def cmd_restart(client, message):
             # Re-register the microphone stream handler
             @call_py.on_update(pytg_filters.stream_frame(Direction.INCOMING, Device.MICROPHONE))
             async def audio_forwarder_handler(_, update: StreamFrames):
-                """ʀᴇɢɪꜱᴛᴇʀᴇᴅ ᴀᴜᴅɪᴏ ʜᴀɴᴅʟᴇʀ"""
-                if is_muted or update.chat_id != RECORD_SOURCE or not forward_chats:
-                    return
-                async with processing_lock:
-                    try:
-                        if not update.frames:
-                            return
-                        frame_length = len(update.frames[0].frame) // 2
-                        mixed_acc = np.zeros(frame_length, dtype=np.int32)
-                        valid_frames = 0
-                        for frame_data in update.frames:
-                            try:
-                                source_samples = np.frombuffer(frame_data.frame, dtype=np.int16)
-                                if len(source_samples) == frame_length:
-                                    mixed_acc += source_samples.astype(np.int32)
-                                    valid_frames += 1
-                            except Exception:
-                                continue
-                        if valid_frames == 0:
-                            return
-                        mixed_acc //= valid_frames
-                        mixed_output = np.clip(mixed_acc, -32768, 32767).astype(np.int16)
-                        loop = asyncio.get_running_loop()
-                        processed_output = await loop.run_in_executor(None, process_audio, mixed_output)
-                        mixed_bytes = processed_output.tobytes()
-                        for chat_id in list(forward_chats):
-                            try:
-                                await call_py.send_frame(chat_id, Device.MICROPHONE, mixed_bytes)
-                            except Exception as e:
-                                logger.debug(f"ꜱᴇɴᴅ ᴇʀʀᴏʀ ᴛᴏ {chat_id}: {e}")
-                                if "not found" in str(e).lower() or "invalid" in str(e).lower():
-                                    forward_chats.discard(chat_id)
-                                    logger.warning(f"ʀᴇᴍᴏᴠᴇᴅ {chat_id} ꜰʀᴏᴍ ꜰᴏʀᴡᴀʀᴅɪɴɢ ʟɪꜱᴛ")
-                    except Exception as e:
-                        logger.error(f"ᴀᴜᴅɪᴏ ʜᴀɴᴅʟᴇʀ ᴇʀʀᴏʀ: {e}")
-            
+                """registered audio handler"""
+                await _forward_incoming_frames(update)
             # Start PyTgCalls
             await call_py.start()
 
@@ -3197,9 +3250,18 @@ async def cmd_joinlink(client, message):
                         f"⏱️ ꜱᴛᴀʀᴛᴇᴅ ᴍᴏɴɪᴛᴏʀɪɴɢ..."
                     )
                     
-                    asyncio.create_task(monitor_join_approval(
-                        client, status_msg, invite_hash, input_text, time.time()
-                    ))
+                    _start_time = time.time()
+                    PENDING_JOIN_REQUESTS[invite_hash] = {
+                        "invite_hash": invite_hash,
+                        "original_link": input_text,
+                        "start_time": _start_time,
+                        "chat_id": message.chat.id,
+                        "message_id": status_msg.id,
+                    }
+                    save_pending_joins()
+                    PENDING_JOIN_MONITORS[invite_hash] = asyncio.create_task(
+                        _run_join_monitor(client, status_msg, invite_hash, input_text, _start_time)
+                    )
                     return
                 
                 # 🎯 Use enhanced error handler
@@ -3703,88 +3765,88 @@ async def refresh_panel(client, callback_query: CallbackQuery):
         
 # ==================== MAIN ====================
 
-if __name__ == "__main__":
+async def main():
+    """Start clients, resume monitors, and idle until stopped."""
     load_state()
-    load_pending_joins()  # Load pending join requests
-    
-    print("🎵 ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅᴇʀ ᴠ5 - ᴄᴏᴍᴘʟᴇᴛᴇ ꜰɪxᴇᴅ ᴠᴇʀꜱɪᴏɴ")
-    print("✅ ᴄᴀᴄʜᴇ-ꜰɪʀꜱᴛ ᴀᴘᴘʀᴏᴀᴄʜ ᴡɪᴛʜ ᴇʀʀᴏʀ ʜᴀɴᴅʟɪɴɢ")
-    print("✅ ꜰᴜʟʟ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ꜱᴜᴘᴘᴏʀᴛ")
-    print("✅ ᴜꜱᴇʀ ᴀᴘᴘʀᴏᴠᴀʟ ꜱʏꜱᴛᴇᴍ - ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ ꜰᴏʀ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ")
-    print(f"📂 ᴘᴇɴᴅɪɴɢ ᴊᴏɪɴꜱ: {len(PENDING_JOIN_REQUESTS)}")
-    print()
-    
+    load_pending_joins()
+
+    print("🎵 Audio Forwarder v5 - complete fixed version")
+    print(f"📂 Pending joins: {len(PENDING_JOIN_REQUESTS)}")
     if SCIPY_AVAILABLE:
-        print("✅ ꜱᴄɪᴘʏ ᴀᴠᴀɪʟᴀʙʟᴇ - ꜰᴜʟʟ ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ")
+        print("✅ scipy available - full audio processing")
     else:
-        print("⚠️ ꜱᴄɪᴘʏ ɴᴏᴛ ᴀᴠᴀɪʟᴀʙʟᴇ - ʙᴀꜱɪᴄ ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ ᴏɴʟʏ")
-        print("   ɪɴꜱᴛᴀʟʟ ᴡɪᴛʜ: ᴘɪᴘ ɪɴꜱᴛᴀʟʟ ꜱᴄɪᴘʏ\n")
-    
+        print("⚠️ scipy not available - basic audio processing only")
+
+    await bot_app.start()
+    print("✅ Bot started successfully")
+
     try:
-        bot_app.start()
-        print("✅ ʙᴏᴛ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
-        
-        try:
-            call_py.start()
-            print("✅ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
-        except Exception as e:
-            print(f"⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛ ꜰᴀɪʟᴇᴅ (User session error): {e}")
-            print("   ʙᴏᴛ ᴡɪʟʟ ꜱᴛɪʟʟ ʀᴜɴ ꜰᴏʀ ʙᴏᴛ ᴄᴏᴍᴍᴀɴᴅꜱ!\n")
-        
-        # Resume pending join monitors
-        asyncio.create_task(resume_pending_joins())
-        print("🔄 ᴘᴇɴᴅɪɴɢ ᴊᴏɪɴ ᴍᴏɴɪᴛᴏʀꜱ ʀᴇꜱᴜᴍᴇᴅ")
-        
-        print("\n✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
-        print("📌 ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ")
-        print("📌 ᴀᴜᴅɪᴏ ᴄᴏᴍᴍᴀɴᴅꜱ: /ʟᴇᴠᴇʟ, /ʙᴀꜱꜱ, /ᴛʀᴇʙʟᴇ, /ɢᴀɪɴ, /ᴇꜰꜰᴇᴄᴛꜱ")
-        print("📌 ᴇxᴛʀᴀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ, /ᴊᴏɪɴʟɪɴᴋ")
-        print("⚠️ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ ɢᴇᴛ ɴᴏ ʀᴇꜱᴘᴏɴꜱᴇ (ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ)\n")
-        
-        idle()
-        
-    except KeyboardInterrupt:
-        print("\n🛑 ꜱʜᴜᴛᴛɪɴɢ ᴅᴏᴡɴ...")
+        await call_py.start()
+        print("✅ PyTgCalls started successfully")
     except Exception as e:
-        print(f"❌ ꜰᴀᴛᴀʟ ᴇʀʀᴏʀ: {e}")
+        print(f"⚠️ PyTgCalls start failed (user session error): {e}")
+        print("   Bot will still run for bot commands!")
+
+    # Running loop exists here, so this is safe now.
+    asyncio.create_task(resume_pending_joins())
+    print("🔄 Pending join monitors resumed")
+
+    print("\n✅ Online! Use /record then /join")
+    print("📌 Owner: /approve, /disapprove, /userlist, /restart")
+    print("📌 Audio: /level, /bass, /treble, /gain, /effects")
+    print("📌 Extra: /ping, /stats, /joinlink\n")
+
+    _idle = idle()
+    if asyncio.iscoroutine(_idle):
+        await _idle
+
+
+async def _shutdown():
+    """Leave calls, stop clients, and save state."""
+    print("🔄 Cleaning up calls...")
+    for chat in list(forward_chats):
+        try:
+            await call_py.leave_call(chat)
+            print(f"   ✅ Left chat: {chat}")
+        except Exception as e:
+            print(f"   ⚠️ Couldn't leave {chat}: {e}")
+    try:
+        await call_py.leave_call(RECORD_SOURCE)
+        print(f"   ✅ Left source: {RECORD_SOURCE}")
+    except Exception as e:
+        print(f"   ⚠️ Couldn't leave source: {e}")
+    try:
+        await call_py.stop()
+        print("   ✅ PyTgCalls stopped")
+    except Exception as e:
+        print(f"   ⚠️ PyTgCalls stop error: {e}")
+    try:
+        if getattr(bot_app, "is_connected", False):
+            await bot_app.stop()
+        print("   ✅ Bot stopped")
+    except Exception as e:
+        print(f"   ⚠️ Bot stop error: {e}")
+    save_state()
+    save_pending_joins()
+    print("   ✅ State saved")
+
+
+if __name__ == "__main__":
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(main())
+    except KeyboardInterrupt:
+        print("\n🛑 Shutting down...")
+    except Exception as e:
+        print(f"❌ Fatal error: {e}")
     finally:
         try:
-            # Leave all calls
-            print("🔄 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ ᴄᴀʟʟꜱ...")
-            for chat in list(forward_chats):
-                try:
-                    call_py.leave_call(chat)
-                    print(f"   ✅ ʟᴇꜰᴛ ᴄʜᴀᴛ: {chat}")
-                except Exception as e:
-                    print(f"   ⚠️ ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ {chat}: {e}")
-            
-            # Leave source
-            try:
-                call_py.leave_call(RECORD_SOURCE)
-                print(f"   ✅ ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}")
-            except Exception as e:
-                print(f"   ⚠️ ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ: {e}")
-            
-            # Stop PyTgCalls
-            try:
-                call_py.stop()
-                print("   ✅ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘᴘᴇᴅ")
-            except Exception as e:
-                print(f"   ⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
-            
-            # Stop Bot
-            try:
-                bot_app.stop()
-                print("   ✅ ʙᴏᴛ ꜱᴛᴏᴘᴘᴇᴅ")
-            except Exception as e:
-                print(f"   ⚠️ ʙᴏᴛ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
-            
-            # Save state
-            save_state()
-            save_pending_joins()
-            print("   ✅ ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
-                
+            loop.run_until_complete(_shutdown())
         except Exception as e:
-            print(f"   ❌ ᴄʟᴇᴀɴᴜᴘ ᴇʀʀᴏʀ: {e}")
-        
-        print("✅ ᴄʟᴇᴀɴᴜᴘ ᴄᴏᴍᴘʟᴇᴛᴇ")
+            print(f"   ❌ Cleanup error: {e}")
+        finally:
+            try:
+                loop.close()
+            except Exception:
+                pass
