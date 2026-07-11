@@ -17,6 +17,7 @@ if hasattr(sys.stderr, "reconfigure"):
 import numpy as np
 import os
 import re
+from typing import Optional, Tuple, Dict
 import json
 import logging
 import asyncio
@@ -49,7 +50,7 @@ from pytgcalls.types import (
 )
 from pytgcalls.types.raw import AudioParameters
 from pytgcalls.exceptions import NoActiveGroupCall
-
+from pyrogram.raw import functions
 
 # ==================== ᴄᴏɴꜰɪɢᴜʀᴀᴛɪᴏɴ ====================
 # ⚠️ Credentials hardcoded directly (no environment variables).
@@ -113,6 +114,12 @@ ADVANCED_AUDIO_CONFIG = {
     'stereo_width': 0, # Stereo Width (-50 to +50)
 }
 # ==================== ᴘᴇʀꜱɪꜱᴛᴇɴᴄᴇ ====================
+
+# 📂 Persistent join request storage
+PENDING_JOIN_FILE = "pending_joins.json"
+PENDING_JOIN_REQUESTS: Dict[str, Dict] = {}
+PENDING_JOIN_MONITORS: Dict[str, asyncio.Task] = {}
+
 STATE_FILE = "bot_state.json"
 
 def save_state():
@@ -2894,403 +2901,494 @@ async def cmd_restart(client, message):
 
 # ==================== ʀᴇꜱᴛᴀʀᴛ ᴄᴏᴍᴍᴀɴᴅ ᴇɴᴅꜱ ====================        
 
+# ==================== ᴇɴʜᴀɴᴄᴇᴅ ᴇxᴄᴇᴘᴛɪᴏɴ ʜᴀɴᴅʟɪɴɢ ====================
+
+from pyrogram.errors import (
+    FloodWait,
+    InviteHashExpired,
+    InviteHashInvalid,
+    UserAlreadyParticipant,
+    ChannelPrivate,
+    RPCError,
+    PeerIdInvalid,
+    UsernameNotOccupied,
+    UserBannedInChannel,
+    ChatAdminRequired,
+    InviteRequestSent,
+)
+
+async def handle_pyrogram_error(e, input_text, status_msg):
+    """🎯 Handle all Pyrogram errors with specific messages"""
+    
+    error_msg = str(e).lower()
+    
+    # ===== FLOOD WAIT =====
+    if isinstance(e, FloodWait) or "flood" in error_msg:
+        wait_time = getattr(e, 'value', None)
+        if not wait_time:
+            wait_match = re.search(r'wait\s*(\d+)', error_msg)
+            wait_time = int(wait_match.group(1)) if wait_match else 30
+        await status_msg.edit_text(
+            f"🚫 **ʀᴀᴛᴇ ʟɪᴍɪᴛᴇᴅ!** (ꜰʟᴏᴏᴅᴡᴀɪᴛ)\n\n"
+            f"⏳ ᴘʟᴇᴀꜱᴇ ᴡᴀɪᴛ **{wait_time} ꜱᴇᴄᴏɴᴅꜱ** ʙᴇꜰᴏʀᴇ ᴛʀʏɪɴɢ ᴀɢᴀɪɴ.\n"
+            f"🔗 **ʟɪɴᴋ:** `{input_text}`"
+        )
+        return True
+    
+    # ===== INVITE HASH EXPIRED =====
+    if isinstance(e, InviteHashExpired) or "expired" in error_msg:
+        await status_msg.edit_text(
+            f"⛔ **ɪɴᴠɪᴛᴇ ʟɪɴᴋ ᴇxᴘɪʀᴇᴅ!**\n\n"
+            f"🔗 **ʟɪɴᴋ:** `{input_text}`\n"
+            f"💡 ʀᴇQᴜᴇꜱᴛ ᴀ ɴᴇᴡ ʟɪɴᴋ ꜰʀᴏᴍ ᴛʜᴇ ᴀᴅᴍɪɴ."
+        )
+        return True
+    
+    # ===== INVITE HASH INVALID =====
+    if isinstance(e, InviteHashInvalid) or "invalid" in error_msg:
+        await status_msg.edit_text(
+            f"❌ **ɪɴᴠᴀʟɪᴅ ɪɴᴠɪᴛᴇ ʜᴀꜱʜ!**\n\n"
+            f"🔗 **ʟɪɴᴋ:** `{input_text}`\n"
+            f"💡 ᴍᴀᴋᴇ ꜱᴜʀᴇ ʏᴏᴜ ᴄᴏᴘɪᴇᴅ ᴛʜᴇ ᴇɴᴛɪʀᴇ ʟɪɴᴋ ᴄᴏʀʀᴇᴄᴛʟʏ."
+        )
+        return True
+    
+    # ===== USER ALREADY PARTICIPANT =====
+    if isinstance(e, UserAlreadyParticipant) or "already" in error_msg or "participant" in error_msg:
+        await status_msg.edit_text(
+            f"ℹ️ **ᴀʟʀᴇᴀᴅʏ ᴀ ᴍᴇᴍʙᴇʀ!** 👋\n\n"
+            f"🔗 **ʟɪɴᴋ:** `{input_text}`\n\n"
+            f"✅ ᴛʜᴇ ᴜꜱᴇʀ ɪꜱ ᴀʟʀᴇᴀᴅʏ ɪɴ ᴛʜɪꜱ ᴄʜᴀᴛ.\n\n"
+            f"💡 ᴜꜱᴇ `/join <ɪᴅ>` ᴛᴏ ꜱᴛᴀʀᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ"
+        )
+        return True
+    
+    # ===== CHANNEL PRIVATE =====
+    if isinstance(e, ChannelPrivate) or "private" in error_msg:
+        await status_msg.edit_text(
+            f"🔒 **ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀɴɴᴇʟ!**\n\n"
+            f"🔗 **ʟɪɴᴋ:** `{input_text}`\n"
+            f"💡 ʏᴏᴜ ɴᴇᴇᴅ ᴀɴ ɪɴᴠɪᴛᴇ ʟɪɴᴋ ꜰʀᴏᴍ ᴛʜᴇ ᴄʜᴀɴɴᴇʟ ᴀᴅᴍɪɴ."
+        )
+        return True
+    
+    # ===== USER BANNED =====
+    if isinstance(e, UserBannedInChannel) or "banned" in error_msg:
+        await status_msg.edit_text(
+            f"🚫 **ʏᴏᴜ'ʀᴇ ʙᴀɴɴᴇᴅ!**\n\n"
+            f"🔗 **ʟɪɴᴋ:** `{input_text}`\n"
+            f"💡 ʏᴏᴜ ᴄᴀɴɴᴏᴛ ᴊᴏɪɴ ᴅᴜᴇ ᴛᴏ ʙᴀɴ."
+        )
+        return True
+    
+    # ===== USERNAME NOT OCCUPIED =====
+    if isinstance(e, UsernameNotOccupied) or "username_not_occupied" in error_msg:
+        await status_msg.edit_text(
+            f"❌ **ᴜꜱᴇʀɴᴀᴍᴇ ᴅᴏᴇꜱɴ'ᴛ ᴇxɪꜱᴛ!**\n\n"
+            f"📛 **ᴜꜱᴇʀɴᴀᴍᴇ:** `{input_text}`\n"
+            f"💡 ᴍᴀᴋᴇ ꜱᴜʀᴇ ᴛʜᴇ ᴜꜱᴇʀɴᴀᴍᴇ ɪꜱ ᴄᴏʀʀᴇᴄᴛ."
+        )
+        return True
+    
+    # ===== CHAT ADMIN REQUIRED =====
+    if isinstance(e, ChatAdminRequired) or "not enough rights" in error_msg:
+        await status_msg.edit_text(
+            f"⚠️ **ɪɴꜱᴜꜰꜰɪᴄɪᴇɴᴛ ᴘᴇʀᴍɪꜱꜱɪᴏɴꜱ!** 🔒\n\n"
+            f"🔗 **ʟɪɴᴋ:** `{input_text}`\n\n"
+            f"❌ ʙᴏᴛ ɴᴇᴇᴅꜱ ᴘᴇʀᴍɪꜱꜱɪᴏɴ ᴛᴏ ᴊᴏɪɴ.\n"
+            f"💡 ᴍᴀᴋᴇ ʙᴏᴛ ᴀ ᴍᴇᴍʙᴇʀ ᴏʀ ᴀᴅᴍɪɴ."
+        )
+        return True
+    
+    # ===== PEER ID INVALID =====
+    if isinstance(e, PeerIdInvalid) or "chat not found" in error_msg:
+        await status_msg.edit_text(
+            f"❌ **ᴄʜᴀᴛ ɴᴏᴛ ꜰᴏᴜɴᴅ!** 🔍\n\n"
+            f"🔗 **ʟɪɴᴋ:** `{input_text}`\n\n"
+            f"⚠️ **ᴘᴏꜱꜱɪʙʟᴇ ʀᴇᴀꜱᴏɴꜱ:**\n"
+            f"• ɪɴᴠᴀʟɪᴅ/ᴇxᴘɪʀᴇᴅ ʟɪɴᴋ\n"
+            f"• ᴄʜᴀᴛ ᴡᴀꜱ ᴅᴇʟᴇᴛᴇᴅ\n"
+            f"• ʙᴏᴛ ɪꜱ ʙʟᴏᴄᴋᴇᴅ"
+        )
+        return True
+    
+    # ===== INVITE REQUEST SENT (Pending Approval) =====
+    if isinstance(e, InviteRequestSent) or "request" in error_msg or "join request" in error_msg:
+        return False
+    
+    # ===== GENERIC RPC ERROR =====
+    if isinstance(e, RPCError):
+        await status_msg.edit_text(
+            f"❌ **ʀᴘᴄ ᴇʀʀᴏʀ!** ⚠️\n\n"
+            f"🔗 **ʟɪɴᴋ:** `{input_text}`\n"
+            f"⚠️ **ᴇʀʀᴏʀ:** `{str(e)[:200]}`\n\n"
+            f"💡 **ᴛʀᴏᴜʙʟᴇꜱʜᴏᴏᴛɪɴɢ:**\n"
+            f"• ᴠᴇʀɪꜰʏ ᴛʜᴇ ʟɪɴᴋ\n"
+            f"• ᴛʀʏ ᴀɢᴀɪɴ ʟᴀᴛᴇʀ\n"
+            f"• ᴜꜱᴇ: `/join <ɪᴅ>`"
+        )
+        return True
+    
+    return False
+
+
 # ==================== ᴊᴏɪɴ ʟɪɴᴋ ᴄᴏᴍᴍᴀɴᴅ ====================
+
+def parse_invite_link(link: str) -> Tuple[Optional[str], Optional[str], Optional[int]]:
+    """🎯 Smart link parser - detects invite hashes, usernames & chat IDs"""
+    link = link.strip()
+    
+    if any(x in link for x in ["t.me/", "telegram.me/", "telegram.dog/"]):
+        path = re.split(r't\.me/|telegram\.me/|telegram\.dog/', link)[-1]
+        path = path.split("?")[0].split("#")[0]
+        
+        patterns = [
+            (r'^\+([a-zA-Z0-9_-]+)$', 'hash'),
+            (r'^joinchat/([a-zA-Z0-9_-]+)$', 'hash'),
+            (r'^c/(\d+)$', 'id'),
+            (r'^@?([a-zA-Z][a-zA-Z0-9_]{4,})$', 'user'),
+            (r'^([a-zA-Z0-9_-]{8,})$', 'hash'),
+            (r'^(-?\d+)$', 'id'),
+        ]
+        
+        for pattern, ptype in patterns:
+            match = re.match(pattern, path)
+            if match:
+                if ptype == 'hash':
+                    return match.group(1), None, None
+                elif ptype == 'user':
+                    return None, f"@{match.group(1)}", None
+                elif ptype == 'id':
+                    val = int(match.group(1))
+                    if val > 0:
+                        return None, None, val
+                    return None, None, int(f"-100{abs(val)}")
+    
+    patterns = [
+        (r'^@?([a-zA-Z][a-zA-Z0-9_]{4,})$', 'user'),
+        (r'^([a-zA-Z0-9_-]{8,})$', 'hash'),
+        (r'^(-?\d+)$', 'id'),
+    ]
+    
+    for pattern, ptype in patterns:
+        match = re.match(pattern, link)
+        if match:
+            if ptype == 'hash':
+                return match.group(1), None, None
+            elif ptype == 'user':
+                return None, f"@{match.group(1)}", None
+            elif ptype == 'id':
+                val = int(match.group(1))
+                if val > 0:
+                    return None, None, val
+                return None, None, int(f"-100{abs(val)}")
+    
+    return None, None, None
+
+
+async def check_existing_join(username: str, chat_id: int, invite_hash: str):
+    """🔍 Check if already joined without calling join_chat()"""
+    try:
+        async for dialog in user_app.get_dialogs(limit=200):
+            dialog_username = getattr(dialog.chat, 'username', None)
+            dialog_id = dialog.chat.id
+            
+            if username and dialog_username and dialog_username.lower() == username.lstrip('@').lower():
+                return dialog.chat
+            if chat_id is not None and dialog_id == chat_id:
+                return dialog.chat
+            if invite_hash:
+                try:
+                    check = await user_app.get_chat(invite_hash)
+                    if check:
+                        return check
+                except Exception:
+                    pass
+    except Exception:
+        pass
+    return None
+
 
 @bot_app.on_message(pyro_filters.command("joinlink") & authorized_only())
 async def cmd_joinlink(client, message):
-    """ᴊᴏɪɴ ᴀ ɢʀᴏᴜᴘ ᴠɪᴀ ɪɴᴠɪᴛᴇ ʟɪɴᴋ ᴏʀ ᴜꜱᴇʀɴᴀᴍᴇ ᴡɪᴛʜ 24ʜ ᴀᴜᴛᴏ-ᴅᴇᴛᴇᴄᴛ"""
+    """ᴊᴏɪɴ ᴀ ɢʀᴏᴜᴘ ᴠɪᴀ ɪɴᴠɪᴛᴇ ʟɪɴᴋ - ғɪxᴇᴅ ᴠᴇʀsɪᴏɴ"""
     parts = message.text.split()
     
     if len(parts) < 2:
         await message.reply(
-            f"❌ **ᴜꜱᴀɢᴇ:** `/joinlink <ʟɪɴᴋ/ᴜꜱᴇʀɴᴀᴍᴇ>`\n\n"
+            f"❌ **ᴜꜱᴀɢᴇ:** `/joinlink <ʟɪɴᴋ>`\n\n"
             f"📌 **ᴇxᴀᴍᴘʟᴇꜱ:**\n"
-            f"• `/joinlink https://t.me/+abc123def`\n"
-            f"• `/joinlink https://t.me/joinchat/xyz789`\n"
-            f"• `/joinlink @mygroup`\n"
-            f"• `/joinlink mygroup`\n\n"
+            f"┌─────────────────────────────────────┐\n"
+            f"│ • `/joinlink https://t.me/+xyz`    │\n"
+            f"│ • `/joinlink https://t.me/joinchat`│\n"
+            f"│ • `/joinlink @mygroup`             │\n"
+            f"│ • `/joinlink mygroup`              │\n"
+            f"└─────────────────────────────────────┘\n\n"
             f"💡 **ꜱᴜᴘᴘᴏʀᴛꜱ:**\n"
-            f"• ᴘʀɪᴠᴀᴛᴇ ɢʀᴏᴜᴘ ʟɪɴᴋꜱ\n"
-            f"• ᴘᴜʙʟɪᴄ ɢʀᴏᴜᴘ ᴜꜱᴇʀɴᴀᴍᴇꜱ\n"
-            f"• ʀᴇQᴜᴇꜱᴛ ᴊᴏɪɴ ʟɪɴᴋꜱ (24ʜ ᴀᴜᴛᴏ-ᴅᴇᴛᴇᴄᴛ)"
+            f"🔐 ᴘʀɪᴠᴀᴛᴇ ɪɴᴠɪᴛᴇ ʟɪɴᴋꜱ (+ʜᴀꜱʜ)\n"
+            f"🌐 ᴘᴜʙʟɪᴄ ɢʀᴏᴜᴘ ᴜꜱᴇʀɴᴀᴍᴇꜱ\n"
+            f"🔢 ᴄʜᴀᴛ ɪᴅꜱ\n"
+            f"⏳ ʀᴇQᴜᴇꜱᴛ-ᴊᴏɪɴ ʟɪɴᴋꜱ (ᴀᴜᴛᴏ-ᴍᴏɴɪᴛᴏʀꜱ)"
         )
         return
     
     input_text = parts[1].strip()
-    status_msg = await message.reply(
-        "🔄 **ᴘʀᴏᴄᴇꜱꜱɪɴɢ ʟɪɴᴋ...**\n\n"
-        "📡 ᴀɴᴀʟʏᴢɪɴɢ ᴀɴᴅ ᴀᴛᴛᴇᴍᴘᴛɪɴɢ ᴛᴏ ᴊᴏɪɴ..."
-    )
+    status_msg = await message.reply("🔄 **ᴘʀᴏᴄᴇꜱꜱɪɴɢ ʏᴏᴜʀ ʀᴇQᴜᴇꜱᴛ...**")
     
     try:
-        # ===== EXTRACT CHAT ID/USERNAME FROM LINK =====
-        chat_identifier = None
-        is_private_link = False
-        is_request_link = False
-        invite_hash = None
-        chat_username = None
+        # 🔍 Parse link using smart parser
+        invite_hash, username, chat_id = parse_invite_link(input_text)
         
-        # Check if it's a Telegram link
-        if "t.me/" in input_text or "telegram.me/" in input_text or "telegram.dog/" in input_text:
-            # Extract the part after t.me/
-            if "t.me/" in input_text:
-                link_part = input_text.split("t.me/")[-1]
-            elif "telegram.me/" in input_text:
-                link_part = input_text.split("telegram.me/")[-1]
-            else:
-                link_part = input_text.split("telegram.dog/")[-1]
+        if not any([invite_hash, username, chat_id]):
+            await status_msg.edit_text(
+                f"❌ **ɪɴᴠᴀʟɪᴅ ɪɴᴠɪᴛᴇ ʟɪɴᴋ!**\n\n"
+                f"🔗 **ɪɴᴘᴜᴛ:** `{input_text}`\n\n"
+                f"💡 **ᴛɪᴘꜱ:**\n"
+                f"• ᴠᴇʀɪꜰʏ ᴛʜᴇ ʟɪɴᴋ ɪꜱ ᴄᴏᴍᴘʟᴇᴛᴇ\n"
+                f"• ᴄʜᴇᴄᴋ ɪꜰ ᴛʜᴇ ʟɪɴᴋ ʜᴀꜱ ᴇxᴘɪʀᴇᴅ\n"
+                f"• ᴇɴꜱᴜʀᴇ ʏᴏᴜ ʜᴀᴠᴇ ᴘʀᴏᴘᴇʀ ᴘᴇʀᴍɪꜱꜱɪᴏɴꜱ\n\n"
+                f"📌 **ᴛʀʏ:** `/joinlink https://t.me/+Vcpn1Nt8D0gwMjFl`"
+            )
+            return
+        
+        # 🔍 Check if already joined (optimized)
+        chat_info = await check_existing_join(username, chat_id, invite_hash)
+        if chat_info:
+            chat_id_show = chat_info.id
+            chat_title = getattr(chat_info, 'title', str(chat_id_show))
+            chat_username = getattr(chat_info, 'username', None)
+            username_str = f"@{chat_username}" if chat_username else "ɴᴏɴᴇ"
+            member_count = getattr(chat_info, 'members_count', 'ɴ/ᴀ')
             
-            # Clean up link part
-            link_part = link_part.split("?")[0].split("/")[0]
-            
-            # Check if it's a private group link (starts with + or joinchat/)
-            if link_part.startswith("+"):
-                is_private_link = True
-                invite_hash = link_part[1:]
-                chat_identifier = f"+{invite_hash}"
-                is_request_link = False
-                
-            elif link_part.startswith("joinchat/"):
-                is_private_link = True
-                invite_hash = link_part.replace("joinchat/", "")
-                chat_identifier = f"joinchat/{invite_hash}"
-                is_request_link = False
-                
-            elif link_part.startswith("c/"):
-                is_private_link = False
-                chat_identifier = link_part.replace("c/", "")
-                if chat_identifier.isdigit():
-                    chat_identifier = int(chat_identifier)
-                    
-            else:
-                # Public username or private link without +
-                if len(link_part) >= 10 and not link_part.isdigit():
-                    is_private_link = True
-                    invite_hash = link_part
-                    chat_identifier = f"+{link_part}"
-                    is_request_link = False
-                else:
-                    is_private_link = False
-                    if not link_part.startswith("@"):
-                        chat_username = f"@{link_part}"
-                    else:
-                        chat_username = link_part
-                    chat_identifier = chat_username
+            await status_msg.edit_text(
+                f"ℹ️ **ᴀʟʀᴇᴀᴅʏ ᴀ ᴍᴇᴍʙᴇʀ!** 👋\n\n"
+                f"┌─────────────────────────────────────┐\n"
+                f"│ 📝 **ɴᴀᴍᴇ:** {chat_title}              │\n"
+                f"│ 🔢 **ɪᴅ:** `{chat_id_show}`              │\n"
+                f"│ 👥 **ᴍᴇᴍʙᴇʀꜱ:** {member_count}          │\n"
+                f"│ 📛 **ᴜꜱᴇʀɴᴀᴍᴇ:** {username_str}         │\n"
+                f"└─────────────────────────────────────┘\n\n"
+                f"💡 **ɴᴇxᴛ ꜱᴛᴇᴘꜱ:**\n"
+                f"• `/join {chat_id_show}` → ꜱᴛᴀʀᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ\n"
+                f"• `/leave {chat_id_show}` → ꜱᴛᴏᴘ ꜰᴏʀᴡᴀʀᴅɪɴɢ"
+            )
+            return
         
-        else:
-            # Not a link, treat as username or chat ID
-            if input_text.startswith("@"):
-                chat_username = input_text
-                chat_identifier = input_text
-            elif input_text.lstrip("-").isdigit():
-                try:
-                    chat_identifier = int(input_text)
-                except ValueError:
-                    chat_username = f"@{input_text}"
-                    chat_identifier = chat_username
-            else:
-                chat_username = f"@{input_text}"
-                chat_identifier = chat_username
-        
-        # ===== FUNCTION TO CHECK JOIN STATUS =====
-        async def check_join_status(identifier, is_hash=False):
-            """ᴄʜᴇᴄᴋ ɪꜰ ᴜꜱᴇʀ ɪꜱ ɪɴ ᴛʜᴇ ᴄʜᴀᴛ"""
+        # 🎯 Join based on link type
+        if invite_hash:
             try:
-                if is_hash:
-                    chat = await user_app.get_chat(identifier)
-                else:
-                    chat = await user_app.get_chat(identifier)
-                return chat, True
-            except Exception:
-                return None, False
-        
-        # ===== JOIN THE CHAT =====
-        chat_info = None
-        join_method = "ᴜɴᴋɴᴏᴡɴ"
-        is_pending = False
-        request_sent = False
-        start_time = time.time()
-        
-        try:
-            if is_private_link and invite_hash:
-                # Try to join via invite link
-                await status_msg.edit_text(
-                    "🔐 **ᴀᴛᴛᴇᴍᴘᴛɪɴɢ ᴛᴏ ᴊᴏɪɴ ᴘʀɪᴠᴀᴛᴇ ɢʀᴏᴜᴘ...**\n\n"
-                    f"🔗 **ʟɪɴᴋ:** `{input_text}`\n"
-                    f"📌 **ʜᴀꜱʜ:** `{invite_hash[:10]}...`"
-                )
+                chat_info = await user_app.join_chat(invite_hash)
+                join_method = "ᴘʀɪᴠᴀᴛᴇ ʟɪɴᴋ"
                 
-                # Try different join methods
-                try:
-                    # Method 1: Direct join
-                    chat_info = await user_app.join_chat(invite_hash)
-                    join_method = "ᴘʀɪᴠᴀᴛᴇ ʟɪɴᴋ (ᴅɪʀᴇᴄᴛ)"
+            except Exception as e:
+                error_str = str(e).lower()
+                
+                # 🎯 Check if it's a request-join link
+                if "request" in error_str or "join request" in error_str:
+                    await status_msg.edit_text(
+                        f"📨 **ᴊᴏɪɴ ʀᴇQᴜᴇꜱᴛ ꜱᴇɴᴛ!**\n\n"
+                        f"┌─────────────────────────────────────┐\n"
+                        f"│ 🔗 **ʟɪɴᴋ:** `{input_text}`      │\n"
+                        f"│ ⏳ **ꜱᴛᴀᴛᴜꜱ:** ⏰ ᴘᴇɴᴅɪɴɢ ᴀᴘᴘʀᴏᴠᴀʟ   │\n"
+                        f"│ 📌 **ᴍᴏɴɪᴛᴏʀ:** 24 ʜᴏᴜʀꜱ ᴍᴀx        │\n"
+                        f"│ 🔄 **ᴄʜᴇᴄᴋ:** ᴇᴠᴇʀʏ 60 ꜱᴇᴄᴏɴᴅꜱ      │\n"
+                        f"└─────────────────────────────────────┘\n\n"
+                        f"💡 ʏᴏᴜ'ʟʟ ʙᴇ ɴᴏᴛɪꜰɪᴇᴅ ᴡʜᴇɴ ᴀᴘᴘʀᴏᴠᴇᴅ!\n"
+                        f"⏱️ ꜱᴛᴀʀᴛᴇᴅ ᴍᴏɴɪᴛᴏʀɪɴɢ..."
+                    )
                     
-                except Exception as e1:
-                    error_str = str(e1).lower()
-                    
-                    # Check if it's a request-join link
-                    if "request" in error_str or "join request" in error_str or "send request" in error_str:
-                        is_request_link = True
-                        is_pending = True
-                        
-                        await status_msg.edit_text(
-                            "📨 **ʀᴇQᴜᴇꜱᴛ-ᴊᴏɪɴ ʟɪɴᴋ ᴅᴇᴛᴇᴄᴛᴇᴅ!**\n\n"
-                            "📤 ꜱᴇɴᴅɪɴɢ ᴊᴏɪɴ ʀᴇQᴜᴇꜱᴛ ᴛᴏ ᴀᴅᴍɪɴ...\n"
-                            "⏳ ᴘʟᴇᴀꜱᴇ ᴡᴀɪᴛ ꜰᴏʀ ᴀᴘᴘʀᴏᴠᴀʟ..."
-                        )
-                        
-                        try:
-                            # NOTE: Pyrogram has NO send_join_request() method.
-                            # The join request was ALREADY sent by the earlier
-                            # join_chat() attempt that raised the "request" error
-                            # handled above, so we just mark it as sent here.
-                            request_sent = True
-                            join_method = "ʀᴇQᴜᴇꜱᴛ ꜱᴇɴᴛ (ᴘᴇɴᴅɪɴɢ)"
-                            
-                            # ===== 24 HOUR AUTO-DETECT LOOP =====
-                            await status_msg.edit_text(
-                                f"✅ **ᴊᴏɪɴ ʀᴇQᴜᴇꜱᴛ ꜱᴇɴᴛ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**\n\n"
-                                f"📌 **ꜱᴛᴀᴛᴜꜱ:** ᴘᴇɴᴅɪɴɢ ᴀᴅᴍɪɴ ᴀᴘᴘʀᴏᴠᴀʟ\n"
-                                f"🔗 **ʟɪɴᴋ:** `{input_text}`\n\n"
-                                f"⏳ ᴘʟᴇᴀꜱᴇ ᴡᴀɪᴛ ꜰᴏʀ ᴀᴅᴍɪɴ ᴛᴏ ᴀᴘᴘʀᴏᴠᴇ ʏᴏᴜʀ ʀᴇQᴜᴇꜱᴛ.\n\n"
-                                f"🔄 **ᴀᴜᴛᴏ-ᴅᴇᴛᴇᴄᴛɪɴɢ ᴀᴘᴘʀᴏᴠᴀʟ ɪɴ ʙᴀᴄᴋɢʀᴏᴜɴᴅ...**\n"
-                                f"⏱️ ᴄʜᴇᴄᴋɪɴɢ ᴇᴠᴇʀʏ 60 ꜱᴇᴄᴏɴᴅꜱ ꜰᴏʀ 24 ʜᴏᴜʀꜱ\n"
-                                f"📊 **ᴇʟᴀᴘꜱᴇᴅ:** 0ᴍ 0ꜱ"
-                            )
-                            
-                            # ===== MONITOR FOR APPROVAL (24 HOURS) =====
-                            approved = False
-                            check_count = 0
-                            max_checks = 1440  # 24 hours * 60 minutes
-                            last_status_update = 0
-                            
-                            while check_count < max_checks and not approved:
-                                await asyncio.sleep(60)  # Check every 60 seconds
-                                check_count += 1
-                                elapsed = int(time.time() - start_time)
-                                elapsed_min = elapsed // 60
-                                elapsed_sec = elapsed % 60
-                                
-                                # Update status every 5 minutes
-                                if check_count % 5 == 0 or check_count == 1:
-                                    hours = elapsed // 3600
-                                    minutes = (elapsed % 3600) // 60
-                                    seconds = elapsed % 60
-                                    
-                                    await status_msg.edit_text(
-                                        f"⏳ **ᴊᴏɪɴ ʀᴇQᴜᴇꜱᴛ ᴘᴇɴᴅɪɴɢ...**\n\n"
-                                        f"📌 **ꜱᴛᴀᴛᴜꜱ:** ᴘᴇɴᴅɪɴɢ ᴀᴅᴍɪɴ ᴀᴘᴘʀᴏᴠᴀʟ\n"
-                                        f"🔗 **ʟɪɴᴋ:** `{input_text}`\n"
-                                        f"⏱️ **ᴇʟᴀᴘꜱᴇᴅ:** {hours}ʜ {minutes}ᴍ {seconds}ꜱ\n"
-                                        f"🔄 **ᴄʜᴇᴄᴋ #:** {check_count}/{max_checks}\n\n"
-                                        f"💡 ᴡɪʟʟ ᴀᴜᴛᴏ-ᴅᴇᴛᴇᴄᴛ ᴡʜᴇɴ ᴀᴅᴍɪɴ ᴀᴘᴘʀᴏᴠᴇꜱ\n"
-                                        f"⏳ ᴍᴀx ᴡᴀɪᴛ: 24 ʜᴏᴜʀꜱ"
-                                    )
-                                
-                                try:
-                                    # Try to get chat info using hash
-                                    chat_info, is_member = await check_join_status(invite_hash, True)
-                                    
-                                    if is_member and chat_info:
-                                        approved = True
-                                        chat_id = chat_info.id
-                                        chat_title = getattr(chat_info, 'title', str(chat_id))
-                                        chat_username = getattr(chat_info, 'username', None)
-                                        username_str = f"@{chat_username}" if chat_username else "ɴᴏɴᴇ"
-                                        member_count = getattr(chat_info, 'members_count', 'ɴ/ᴀ')
-                                        
-                                        elapsed_total = int(time.time() - start_time)
-                                        hours = elapsed_total // 3600
-                                        minutes = (elapsed_total % 3600) // 60
-                                        seconds = elapsed_total % 60
-                                        
-                                        # Send approval message
-                                        await status_msg.edit_text(
-                                            f"✅ **ᴊᴏɪɴ ʀᴇQᴜᴇꜱᴛ ᴀᴘᴘʀᴏᴠᴇᴅ!** 🎉\n\n"
-                                            f"────────────────────\n"
-                                            f"📝 **ɴᴀᴍᴇ:** {chat_title}\n"
-                                            f"🔢 **ɪᴅ:** `{chat_id}`\n"
-                                            f"📌 **ᴛʏᴘᴇ:** ɢʀᴏᴜᴘ\n"
-                                            f"👥 **ᴍᴇᴍʙᴇʀꜱ:** {member_count}\n"
-                                            f"📛 **ᴜꜱᴇʀɴᴀᴍᴇ:** {username_str}\n"
-                                            f"⏱️ **ᴛɪᴍᴇ ᴛᴀᴋᴇɴ:** {hours}ʜ {minutes}ᴍ {seconds}ꜱ\n"
-                                            f"🔗 **ʟɪɴᴋ:** `{input_text}`\n"
-                                            f"📊 **ꜱᴛᴀᴛᴜꜱ:** ✅ ᴊᴏɪɴᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ\n"
-                                            f"────────────────────\n\n"
-                                            f"💡 **ɴᴇxᴛ ꜱᴛᴇᴘꜱ:**\n"
-                                            f"• ᴜꜱᴇ `/ᴊᴏɪɴ {chat_id}` ᴛᴏ ꜱᴛᴀʀᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ\n"
-                                            f"• ᴜꜱᴇ `/ʟᴇᴀᴠᴇ {chat_id}` ᴛᴏ ꜱᴛᴏᴘ\n"
-                                            f"• ᴜꜱᴇ `/ʟɪꜱᴛ` ᴛᴏ ꜱᴇᴇ ᴀʟʟ ᴀᴄᴛɪᴠᴇ"
-                                        )
-                                        
-                                        logger.info(f"✅ ʀᴇQᴜᴇꜱᴛ ᴀᴘᴘʀᴏᴠᴇᴅ: ᴊᴏɪɴᴇᴅ {chat_id} ᴠɪᴀ ʟɪɴᴋ: {input_text}")
-                                        return
-                                        
-                                except Exception:
-                                    continue
-                            
-                            # ===== IF NOT APPROVED WITHIN 24 HOURS =====
-                            if not approved:
-                                await status_msg.edit_text(
-                                    f"⏰ **ᴛɪᴍᴇ ᴏᴜᴛ! 24 ʜᴏᴜʀꜱ ᴘᴀꜱꜱᴇᴅ**\n\n"
-                                    f"────────────────────\n"
-                                    f"📨 **ꜱᴛᴀᴛᴜꜱ:** ʀᴇQᴜᴇꜱᴛ ᴇxᴘɪʀᴇᴅ\n"
-                                    f"🔗 **ʟɪɴᴋ:** `{input_text}`\n"
-                                    f"⏱️ **ᴡᴀɪᴛᴇᴅ:** 24+ ʜᴏᴜʀꜱ\n"
-                                    f"────────────────────\n\n"
-                                    f"💡 **ᴡʜᴀᴛ ᴛᴏ ᴅᴏ ɴᴏᴡ?**\n"
-                                    f"• ᴀᴅᴍɪɴ ᴅɪᴅɴ'ᴛ ᴀᴘᴘʀᴏᴠᴇ ʏᴏᴜʀ ʀᴇQᴜᴇꜱᴛ\n"
-                                    f"• ᴛʀʏ ᴀɢᴀɪɴ ᴡɪᴛʜ ᴀ ɴᴇᴡ ʟɪɴᴋ\n"
-                                    f"• ᴏʀ ᴜꜱᴇ `/ᴊᴏɪɴ <ɪᴅ>` ᴅɪʀᴇᴄᴛʟʏ ɪꜰ ʏᴏᴜ'ʀᴇ ᴀʟʀᴇᴀᴅʏ ᴀ ᴍᴇᴍʙᴇʀ"
-                                )
-                                return
-                                
-                        except Exception as e2:
-                            error_str2 = str(e2).lower()
-                            if "already" in error_str2 or "participant" in error_str2:
-                                # Already in chat
-                                try:
-                                    chat_info = await user_app.get_chat(invite_hash)
-                                    join_method = "ᴀʟʀᴇᴀᴅʏ ᴊᴏɪɴᴇᴅ"
-                                except Exception:
-                                    pass
-                            else:
-                                raise e2
-                                
-                    elif "already" in error_str or "participant" in error_str or "member" in error_str:
-                        # Already in chat
-                        try:
-                            chat_info = await user_app.get_chat(invite_hash)
-                            join_method = "ᴀʟʀᴇᴀᴅʏ ᴊᴏɪɴᴇᴅ"
-                        except Exception:
-                            pass
-                    else:
-                        raise e1
+                    asyncio.create_task(monitor_join_approval(
+                        client, status_msg, invite_hash, input_text, time.time()
+                    ))
+                    return
+                
+                # 🎯 Use enhanced error handler
+                if await handle_pyrogram_error(e, input_text, status_msg):
+                    return
+                
+                # 🎯 If still not handled, re-raise
+                raise e
+        
+        elif username:
+            try:
+                chat_info = await user_app.join_chat(username)
+                join_method = "ᴘᴜʙʟɪᴄ ᴜꜱᴇʀɴᴀᴍᴇ"
+            except Exception as e:
+                if await handle_pyrogram_error(e, input_text, status_msg):
+                    return
+                raise e
+        
+        elif chat_id is not None:
+            try:
+                chat_info = await user_app.join_chat(chat_id)
+                join_method = "ᴄʜᴀᴛ ɪᴅ"
+            except Exception as e:
+                if await handle_pyrogram_error(e, input_text, status_msg):
+                    return
+                raise e
+        
+        # ===== CHECK IF JOIN SUCCESSFUL =====
+        if chat_info:
+            chat_id_show = chat_info.id
+            chat_title = getattr(chat_info, 'title', str(chat_id_show))
             
+            chat_type_obj = getattr(chat_info, 'type', None)
+            if chat_type_obj == ChatType.CHANNEL:
+                chat_type = "ᴄʜᴀɴɴᴇʟ"
+            elif chat_type_obj in (ChatType.GROUP, ChatType.SUPERGROUP):
+                chat_type = "ɢʀᴏᴜᴘ"
             else:
-                # Public chat via username
-                await status_msg.edit_text(
-                    "🌐 **ᴀᴛᴛᴇᴍᴘᴛɪɴɢ ᴛᴏ ᴊᴏɪɴ ᴘᴜʙʟɪᴄ ᴄʜᴀᴛ...**\n\n"
-                    f"📝 **ᴜꜱᴇʀɴᴀᴍᴇ:** `{chat_identifier}`"
-                )
+                chat_type = "ᴄʜᴀᴛ"
+            
+            chat_username = getattr(chat_info, 'username', None)
+            username_str = f"@{chat_username}" if chat_username else "ɴᴏɴᴇ"
+            member_count = getattr(chat_info, 'members_count', 'ɴ/ᴀ')
+            
+            success_msg = f"""
+✅ **ᴄʜᴀᴛ ᴊᴏɪɴᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!** 🎉
+
+┌─────────────────────────────────────┐
+│ 📝 **ɴᴀᴍᴇ:** {chat_title}              │
+│ 🔢 **ɪᴅ:** `{chat_id_show}`              │
+│ 📌 **ᴛʏᴘᴇ:** {chat_type}               │
+│ 👥 **ᴍᴇᴍʙᴇʀꜱ:** {member_count}          │
+│ 📛 **ᴜꜱᴇʀɴᴀᴍᴇ:** {username_str}         │
+│ 🔗 **ᴍᴇᴛʜᴏᴅ:** {join_method}            │
+└─────────────────────────────────────┘
+
+💡 **ɴᴇxᴛ ꜱᴛᴇᴘꜱ:**
+• `/join {chat_id_show}` - ꜱᴛᴀʀᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ
+• `/leave {chat_id_show}` - ꜱᴛᴏᴘ ꜰᴏʀᴡᴀʀᴅɪɴɢ
+• `/list` - ꜱᴇᴇ ᴀʟʟ ᴀᴄᴛɪᴠᴇ
+"""
+            
+            await status_msg.edit_text(success_msg)
+            logger.info(f"✅ ᴊᴏɪɴᴇᴅ {chat_id_show} ᴠɪᴀ: {input_text}")
+            return
+            
+        else:
+            await status_msg.edit_text(
+                f"❌ **ꜰᴀɪʟᴇᴅ ᴛᴏ ᴊᴏɪɴ ᴄʜᴀᴛ!**\n\n"
+                f"🔗 **ʟɪɴᴋ:** `{input_text}`\n\n"
+                f"⚠️ **ᴘᴏꜱꜱɪʙʟᴇ ʀᴇᴀꜱᴏɴꜱ:**\n"
+                f"• ɪɴᴠᴀʟɪᴅ/ᴇxᴘɪʀᴇᴅ ʟɪɴᴋ\n"
+                f"• ʙᴏᴛ ɪꜱ ʙʟᴏᴄᴋᴇᴅ\n"
+                f"• ᴄʜᴀᴛ ᴡᴀꜱ ᴅᴇʟᴇᴛᴇᴅ\n\n"
+                f"💡 ᴛʀʏ: `/join <ɪᴅ>` ᴅɪʀᴇᴄᴛʟʏ"
+            )
+            
+    except Exception as e:
+        # 🎯 Final fallback error handler
+        if not await handle_pyrogram_error(e, input_text, status_msg):
+            logger.error(f"ᴊᴏɪɴʟɪɴᴋ ᴇʀʀᴏʀ: {e}")
+            await status_msg.edit_text(
+                f"❌ **ᴜɴʜᴀɴᴅʟᴇᴅ ᴇʀʀᴏʀ!** ⚠️\n\n"
+                f"🔗 **ʟɪɴᴋ:** `{input_text}`\n"
+                f"⚠️ **ᴇʀʀᴏʀ:** `{str(e)[:200]}`\n\n"
+                f"💡 ᴘʟᴇᴀꜱᴇ ᴛʀʏ ᴀɢᴀɪɴ ᴏʀ ᴄᴏɴᴛᴀᴄᴛ ꜱᴜᴘᴘᴏʀᴛ."
+            )
+
+
+async def monitor_join_approval(client, status_msg, invite_hash, original_link, start_time):
+    """ᴍᴏɴɪᴛᴏʀ ᴊᴏɪɴ ʀᴇQᴜᴇꜱᴛ ꜱᴛᴀᴛᴜꜱ ꜰᴏʀ 24 ʜᴏᴜʀꜱ"""
+    
+    check_count = 0
+    max_checks = 1440
+    
+    try:
+        while check_count < max_checks:
+            await asyncio.sleep(60)
+            check_count += 1
+            elapsed = int(time.time() - start_time)
+            
+            if check_count % 5 == 0:
+                hours = elapsed // 3600
+                minutes = (elapsed % 3600) // 60
+                seconds = elapsed % 60
                 
                 try:
-                    chat_info = await user_app.join_chat(chat_identifier)
-                    join_method = "ᴘᴜʙʟɪᴄ ᴄʜᴀᴛ (ᴅɪʀᴇᴄᴛ)"
-                except Exception as e:
-                    error_str = str(e).lower()
-                    if "already" in error_str or "participant" in error_str or "member" in error_str:
-                        chat_info = await user_app.get_chat(chat_identifier)
-                        join_method = "ᴀʟʀᴇᴀᴅʏ ᴊᴏɪɴᴇᴅ"
-                    else:
-                        raise e
+                    await status_msg.edit_text(
+                        f"⏳ **ᴊᴏɪɴ ʀᴇQᴜᴇꜱᴛ ᴘᴇɴᴅɪɴɢ...**\n\n"
+                        f"┌─────────────────────────────────────┐\n"
+                        f"│ 🔗 **ʟɪɴᴋ:** `{original_link}`      │\n"
+                        f"│ ⏱️ **ᴇʟᴀᴘꜱᴇᴅ:** {hours}ʜ {minutes}ᴍ {seconds}ꜱ │\n"
+                        f"│ 🔄 **ᴄʜᴇᴄᴋ #:** {check_count}/{max_checks} │\n"
+                        f"└─────────────────────────────────────┘\n\n"
+                        f"💡 ᴡɪʟʟ ᴀᴜᴛᴏ-ᴅᴇᴛᴇᴄᴛ ᴡʜᴇɴ ᴀᴅᴍɪɴ ᴀᴘᴘʀᴏᴠᴇꜱ"
+                    )
+                except Exception:
+                    pass
             
-            # ===== CHECK IF JOIN SUCCESSFUL =====
-            if chat_info:
-                chat_id = chat_info.id
-                chat_title = getattr(chat_info, 'title', str(chat_id))
-                _ctype = getattr(chat_info, 'type', None)
-                if _ctype == ChatType.CHANNEL:
-                    chat_type = "ᴄʜᴀɴɴᴇʟ"
-                elif _ctype in (ChatType.GROUP, ChatType.SUPERGROUP):
-                    chat_type = "ɢʀᴏᴜᴘ"
-                else:
-                    chat_type = "ᴄʜᴀᴛ"
+            try:
+                chat_info = await user_app.join_chat(invite_hash)
                 
-                # Get additional info
+                chat_id_show = chat_info.id
+                chat_title = getattr(chat_info, 'title', str(chat_id_show))
                 chat_username = getattr(chat_info, 'username', None)
                 username_str = f"@{chat_username}" if chat_username else "ɴᴏɴᴇ"
                 member_count = getattr(chat_info, 'members_count', 'ɴ/ᴀ')
+                elapsed_total = int(time.time() - start_time)
+                hours = elapsed_total // 3600
+                minutes = (elapsed_total % 3600) // 60
+                seconds = elapsed_total % 60
                 
-                # ===== SUCCESS MESSAGE =====
-                success_msg = f"""
-✅ **ᴄʜᴀᴛ ᴊᴏɪɴᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!** 🎉
-
-────────────────────
-📝 **ɴᴀᴍᴇ:** {chat_title}
-🔢 **ɪᴅ:** `{chat_id}`
-📌 **ᴛʏᴘᴇ:** {chat_type}
-👥 **ᴍᴇᴍʙᴇʀꜱ:** {member_count}
-📛 **ᴜꜱᴇʀɴᴀᴍᴇ:** {username_str}
-🔗 **ᴍᴇᴛʜᴏᴅ:** {join_method}
-────────────────────
-
-💡 **ɴᴇxᴛ ꜱᴛᴇᴘꜱ:**
-• ᴜꜱᴇ `/ᴊᴏɪɴ {chat_id}` ᴛᴏ ꜱᴛᴀʀᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ
-• ᴜꜱᴇ `/ʟᴇᴀᴠᴇ {chat_id}` ᴛᴏ ꜱᴛᴏᴘ
-• ᴜꜱᴇ `/ʟɪꜱᴛ` ᴛᴏ ꜱᴇᴇ ᴀʟʟ ᴀᴄᴛɪᴠᴇ
-"""
-                
-                await status_msg.edit_text(success_msg)
-                logger.info(f"ᴊᴏɪɴᴇᴅ ᴄʜᴀᴛ {chat_id} ᴠɪᴀ ʟɪɴᴋ: {input_text}")
-                
-            else:
                 await status_msg.edit_text(
-                    f"❌ **ꜰᴀɪʟᴇᴅ ᴛᴏ ᴊᴏɪɴ ᴄʜᴀᴛ!**\n\n"
-                    f"🔗 **ʟɪɴᴋ:** `{input_text}`\n\n"
-                    f"⚠️ **ᴘᴏꜱꜱɪʙʟᴇ ʀᴇᴀꜱᴏɴꜱ:**\n"
-                    f"• ɪɴᴠᴀʟɪᴅ ɪɴᴠɪᴛᴇ ʟɪɴᴋ\n"
-                    f"• ʟɪɴᴋ ᴇxᴘɪʀᴇᴅ\n"
-                    f"• ᴄʜᴀᴛ ɴᴏᴛ ꜰᴏᴜɴᴅ\n"
-                    f"• ʙᴏᴛ ʙʟᴏᴄᴋᴇᴅ\n\n"
-                    f"💡 ᴛʀʏ ᴜꜱɪɴɢ ᴛʜᴇ ᴄʜᴀᴛ ɪᴅ ᴅɪʀᴇᴄᴛʟʏ: `/ᴊᴏɪɴ <ɪᴅ>`"
+                    f"✅ **ᴊᴏɪɴ ʀᴇQᴜᴇꜱᴛ ᴀᴘᴘʀᴏᴠᴇᴅ!** 🎉\n\n"
+                    f"┌─────────────────────────────────────┐\n"
+                    f"│ 📝 **ɴᴀᴍᴇ:** {chat_title}              │\n"
+                    f"│ 🔢 **ɪᴅ:** `{chat_id_show}`              │\n"
+                    f"│ 👥 **ᴍᴇᴍʙᴇʀꜱ:** {member_count}          │\n"
+                    f"│ 📛 **ᴜꜱᴇʀɴᴀᴍᴇ:** {username_str}         │\n"
+                    f"│ ⏱️ **ᴛɪᴍᴇ ᴛᴀᴋᴇɴ:** {hours}ʜ {minutes}ᴍ {seconds}ꜱ │\n"
+                    f"└─────────────────────────────────────┘\n\n"
+                    f"💡 **ɴᴇxᴛ ꜱᴛᴇᴘꜱ:**\n"
+                    f"• `/join {chat_id_show}` - ꜱᴛᴀʀᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ\n"
+                    f"• `/leave {chat_id_show}` - ꜱᴛᴏᴘ ꜰᴏʀᴡᴀʀᴅɪɴɢ"
                 )
+                logger.info(f"✅ ᴊᴏɪɴ ʀᴇQᴜᴇꜱᴛ ᴀᴘᴘʀᴏᴠᴇᴅ ꜰᴏʀ: {original_link}")
+                return
                 
-        except Exception as e:
-            error_msg = str(e)
+            except Exception as e:
+                error_str = str(e).lower()
+                
+                # 🎯 Check for specific errors during monitoring
+                if "expired" in error_str or "invalid" in error_str:
+                    await status_msg.edit_text(
+                        f"⛔ **ɪɴᴠɪᴛᴇ ʟɪɴᴋ ᴇxᴘɪʀᴇᴅ/ɪɴᴠᴀʟɪᴅ!**\n\n"
+                        f"🔗 **ʟɪɴᴋ:** `{original_link}`\n"
+                        f"💡 ᴘʟᴇᴀꜱᴇ ʀᴇQᴜᴇꜱᴛ ᴀ ɴᴇᴡ ʟɪɴᴋ."
+                    )
+                    return
+                elif "banned" in error_str:
+                    await status_msg.edit_text(
+                        f"🚫 **ʏᴏᴜ ᴡᴇʀᴇ ʙᴀɴɴᴇᴅ ꜰʀᴏᴍ ᴛʜɪꜱ ᴄʜᴀᴛ!**\n\n"
+                        f"🔗 **ʟɪɴᴋ:** `{original_link}`"
+                    )
+                    return
+                elif "flood" in error_str:
+                    # Continue monitoring, flood might be temporary
+                    pass
+                # Otherwise continue monitoring
             
-            # Handle specific errors with style
-            if "chat not found" in error_msg.lower() or "invalid" in error_msg.lower():
+            if elapsed > 86400:
                 await status_msg.edit_text(
-                    f"❌ **ᴄʜᴀᴛ ɴᴏᴛ ꜰᴏᴜɴᴅ!** 🔍\n\n"
-                    f"🔗 **ʟɪɴᴋ:** `{input_text}`\n\n"
-                    f"⚠️ **ᴘᴏꜱꜱɪʙʟᴇ ʀᴇᴀꜱᴏɴꜱ:**\n"
-                    f"• ɪɴᴠᴀʟɪᴅ ɪɴᴠɪᴛᴇ ʟɪɴᴋ\n"
-                    f"• ʟɪɴᴋ ᴇxᴘɪʀᴇᴅ\n"
-                    f"• ᴄʜᴀᴛ ᴡᴀꜱ ᴅᴇʟᴇᴛᴇᴅ\n\n"
-                    f"💡 **ᴛɪᴘ:** ᴜꜱᴇ `/ɪᴅ` ɪɴ ᴛʜᴇ ᴄʜᴀᴛ ᴛᴏ ɢᴇᴛ ᴄᴏʀʀᴇᴄᴛ ɪᴅ"
+                    f"⏰ **ᴛɪᴍᴇ ᴏᴜᴛ! 24 ʜᴏᴜʀꜱ ᴘᴀꜱꜱᴇᴅ**\n\n"
+                    f"┌─────────────────────────────────────┐\n"
+                    f"│ 📨 **ꜱᴛᴀᴛᴜꜱ:** ʀᴇQᴜᴇꜱᴛ ᴇxᴘɪʀᴇᴅ    │\n"
+                    f"│ 🔗 **ʟɪɴᴋ:** `{original_link}`      │\n"
+                    f"│ ⏱️ **ᴡᴀɪᴛᴇᴅ:** 24+ ʜᴏᴜʀꜱ            │\n"
+                    f"└─────────────────────────────────────┘\n\n"
+                    f"💡 **ᴡʜᴀᴛ ᴛᴏ ᴅᴏ?**\n"
+                    f"• ᴀᴅᴍɪɴ ᴅɪᴅɴ'ᴛ ᴀᴘᴘʀᴏᴠᴇ\n"
+                    f"• ᴛʀʏ ᴀ ɴᴇᴡ ʟɪɴᴋ\n"
+                    f"• ᴜꜱᴇ: `/join <ɪᴅ>` ɪꜰ ᴀʟʀᴇᴀᴅʏ ᴀ ᴍᴇᴍʙᴇʀ"
                 )
-            elif "flood" in error_msg.lower():
-                await status_msg.edit_text(
-                    f"⚠️ **ꜰʟᴏᴏᴅ ᴅᴇᴛᴇᴄᴛᴇᴅ!** 🚫\n\n"
-                    f"🔗 **ʟɪɴᴋ:** `{input_text}`\n\n"
-                    f"🔄 ᴘʟᴇᴀꜱᴇ ᴡᴀɪᴛ ᴀ ꜰᴇᴡ ᴍɪɴᴜᴛᴇꜱ ʙᴇꜰᴏʀᴇ ᴛʀʏɪɴɢ ᴀɢᴀɪɴ.\n\n"
-                    f"💡 ᴛʜɪꜱ ɪꜱ ᴛᴏ ᴘʀᴇᴠᴇɴᴛ ʀᴀᴛᴇ ʟɪᴍɪᴛɪɴɢ."
-                )
-            elif "not enough rights" in error_msg.lower() or "not admin" in error_msg.lower():
-                await status_msg.edit_text(
-                    f"⚠️ **ɪɴꜱᴜꜰꜰɪᴄɪᴇɴᴛ ᴘᴇʀᴍɪꜱꜱɪᴏɴꜱ!** 🔒\n\n"
-                    f"🔗 **ʟɪɴᴋ:** `{input_text}`\n\n"
-                    f"❌ ᴛʜᴇ ʙᴏᴛ ᴅᴏᴇꜱɴ'ᴛ ʜᴀᴠᴇ ᴇɴᴏᴜɢʜ ᴘᴇʀᴍɪꜱꜱɪᴏɴꜱ ᴛᴏ ᴊᴏɪɴ.\n\n"
-                    f"💡 ᴍᴀᴋᴇ ꜱᴜʀᴇ ᴛʜᴇ ʙᴏᴛ ʜᴀꜱ ʀɪɢʜᴛꜱ ᴛᴏ ᴊᴏɪɴ ᴛʜᴇ ᴄʜᴀᴛ."
-                )
-            elif "user is already" in error_msg.lower() or "already participant" in error_msg.lower():
-                await status_msg.edit_text(
-                    f"ℹ️ **ᴀʟʀᴇᴀᴅʏ ᴀ ᴍᴇᴍʙᴇʀ!** 👋\n\n"
-                    f"🔗 **ʟɪɴᴋ:** `{input_text}`\n\n"
-                    f"✅ ᴛʜᴇ ᴜꜱᴇʀ ɪꜱ ᴀʟʀᴇᴀᴅʏ ɪɴ ᴛʜɪꜱ ᴄʜᴀᴛ.\n\n"
-                    f"💡 ᴜꜱᴇ `/ᴊᴏɪɴ <ɪᴅ>` ᴛᴏ ꜱᴛᴀʀᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ."
-                )
-            else:
-                await status_msg.edit_text(
-                    f"❌ **ᴇʀʀᴏʀ ᴏᴄᴄᴜʀʀᴇᴅ!** ⚠️\n\n"
-                    f"🔗 **ʟɪɴᴋ:** `{input_text}`\n"
-                    f"⚠️ **ᴇʀʀᴏʀ:** `{error_msg[:200]}`\n\n"
-                    f"💡 **ᴛʀᴏᴜʙʟᴇꜱʜᴏᴏᴛɪɴɢ:**\n"
-                    f"• ᴠᴇʀɪꜰʏ ᴛʜᴇ ʟɪɴᴋ ɪꜱ ᴄᴏʀʀᴇᴄᴛ\n"
-                    f"• ᴇɴꜱᴜʀᴇ ᴛʜᴇ ʙᴏᴛ ɪꜱ ᴀᴅᴍɪɴ\n"
-                    f"• ᴛʀʏ ᴜꜱɪɴɢ ᴄʜᴀᴛ ɪᴅ: `/ᴊᴏɪɴ <ɪᴅ>`"
-                )
-            logger.error(f"ᴊᴏɪɴʟɪɴᴋ ᴇʀʀᴏʀ ꜰᴏʀ {input_text}: {e}")
-            
+                return
+                
+    except asyncio.CancelledError:
+        logger.info(f"ᴊᴏɪɴ ᴍᴏɴɪᴛᴏʀ ᴄᴀɴᴄᴇʟʟᴇᴅ ꜰᴏʀ: {original_link}")
     except Exception as e:
-        await status_msg.edit_text(
-            f"❌ **ᴜɴᴇxᴘᴇᴄᴛᴇᴅ ᴇʀʀᴏʀ!** 💥\n\n"
-            f"🔗 **ʟɪɴᴋ:** `{input_text}`\n"
-            f"⚠️ **ᴇʀʀᴏʀ:** `{str(e)[:200]}`"
-        )
-        logger.error(f"ᴊᴏɪɴʟɪɴᴋ ᴜɴᴇxᴘᴇᴄᴛᴇᴅ ᴇʀʀᴏʀ: {e}")
+        logger.error(f"ᴊᴏɪɴ ᴍᴏɴɪᴛᴏʀ ᴇʀʀᴏʀ: {e}")
 
 # ==================== ᴊᴏɪɴ ʟɪɴᴋ ᴄᴏᴍᴍᴀɴᴅ ᴇɴᴅꜱ ====================
 
@@ -3607,10 +3705,14 @@ async def refresh_panel(client, callback_query: CallbackQuery):
 
 if __name__ == "__main__":
     load_state()
+    load_pending_joins()  # 🔴 ADDED - Load pending join requests
+    
     print("🎵 ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅᴇʀ ᴠ5 - ᴄᴏᴍᴘʟᴇᴛᴇ ꜰɪxᴇᴅ ᴠᴇʀꜱɪᴏɴ")
     print("✅ ᴄᴀᴄʜᴇ-ꜰɪʀꜱᴛ ᴀᴘᴘʀᴏᴀᴄʜ ᴡɪᴛʜ ᴇʀʀᴏʀ ʜᴀɴᴅʟɪɴɢ")
     print("✅ ꜰᴜʟʟ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ꜱᴜᴘᴘᴏʀᴛ")
-    print("✅ ᴜꜱᴇʀ ᴀᴘᴘʀᴏᴠᴀʟ ꜱʏꜱᴛᴇᴍ - ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ ꜰᴏʀ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ\n")
+    print("✅ ᴜꜱᴇʀ ᴀᴘᴘʀᴏᴠᴀʟ ꜱʏꜱᴛᴇᴍ - ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ ꜰᴏʀ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ")
+    print(f"📂 ᴘᴇɴᴅɪɴɢ ᴊᴏɪɴꜱ: {len(PENDING_JOIN_REQUESTS)}")
+    print()
     
     if SCIPY_AVAILABLE:
         print("✅ ꜱᴄɪᴘʏ ᴀᴠᴀɪʟᴀʙʟᴇ - ꜰᴜʟʟ ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ")
@@ -3620,16 +3722,23 @@ if __name__ == "__main__":
     
     try:
         bot_app.start()
+        print("✅ ʙᴏᴛ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
+        
         try:
             call_py.start()
+            print("✅ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
         except Exception as e:
             print(f"⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛ ꜰᴀɪʟᴇᴅ (User session error): {e}")
             print("   ʙᴏᴛ ᴡɪʟʟ ꜱᴛɪʟʟ ʀᴜɴ ꜰᴏʀ ʙᴏᴛ ᴄᴏᴍᴍᴀɴᴅꜱ!\n")
         
-        print("✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
+        # 🔴 ADDED - Resume pending join monitors
+        asyncio.create_task(resume_pending_joins())
+        print("🔄 ᴘᴇɴᴅɪɴɢ ᴊᴏɪɴ ᴍᴏɴɪᴛᴏʀꜱ ʀᴇꜱᴜᴍᴇᴅ")
+        
+        print("\n✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
         print("📌 ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ")
         print("📌 ᴀᴜᴅɪᴏ ᴄᴏᴍᴍᴀɴᴅꜱ: /ʟᴇᴠᴇʟ, /ʙᴀꜱꜱ, /ᴛʀᴇʙʟᴇ, /ɢᴀɪɴ, /ᴇꜰꜰᴇᴄᴛꜱ")
-        print("📌 ᴇxᴛʀᴀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ")
+        print("📌 ᴇxᴛʀᴀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ, /ᴊᴏɪɴʟɪɴᴋ")
         print("⚠️ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ ɢᴇᴛ ɴᴏ ʀᴇꜱᴘᴏɴꜱᴇ (ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ)\n")
         
         idle()
@@ -3641,31 +3750,41 @@ if __name__ == "__main__":
     finally:
         try:
             # Leave all calls
+            print("🔄 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ ᴄᴀʟʟꜱ...")
             for chat in list(forward_chats):
                 try:
                     call_py.leave_call(chat)
-                except Exception:
-                    pass
+                    print(f"   ✅ ʟᴇꜰᴛ ᴄʜᴀᴛ: {chat}")
+                except Exception as e:
+                    print(f"   ⚠️ ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ {chat}: {e}")
             
             # Leave source
             try:
                 call_py.leave_call(RECORD_SOURCE)
-            except Exception:
-                pass
+                print(f"   ✅ ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}")
+            except Exception as e:
+                print(f"   ⚠️ ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ: {e}")
             
             # Stop PyTgCalls
             try:
                 call_py.stop()
-            except Exception:
-                pass
+                print("   ✅ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘᴘᴇᴅ")
+            except Exception as e:
+                print(f"   ⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
             
             # Stop Bot
             try:
                 bot_app.stop()
-            except Exception:
-                pass
+                print("   ✅ ʙᴏᴛ ꜱᴛᴏᴘᴘᴇᴅ")
+            except Exception as e:
+                print(f"   ⚠️ ʙᴏᴛ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
+            
+            # Save state
+            save_state()
+            save_pending_joins()  # 🔴 ADDED - Save pending joins
+            print("   ✅ ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
                 
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"   ❌ ᴄʟᴇᴀɴᴜᴘ ᴇʀʀᴏʀ: {e}")
         
         print("✅ ᴄʟᴇᴀɴᴜᴘ ᴄᴏᴍᴘʟᴇᴛᴇ")
