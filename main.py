@@ -3770,31 +3770,32 @@ async def main():
     load_state()
     load_pending_joins()
 
-    print("🎵 Audio Forwarder v5 - complete fixed version")
-    print(f"📂 Pending joins: {len(PENDING_JOIN_REQUESTS)}")
+    print("🎵 ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅᴇʀ ᴠ5 - ᴄᴏᴍᴘʟᴇᴛᴇ ꜰɪxᴇᴅ ᴠᴇʀꜱɪᴏɴ")
+    print(f"📂 ᴘᴇɴᴅɪɴɢ ᴊᴏɪɴꜱ: {len(PENDING_JOIN_REQUESTS)}")
+    
     if SCIPY_AVAILABLE:
-        print("✅ scipy available - full audio processing")
+        print("✅ ꜱᴄɪᴘʏ ᴀᴠᴀɪʟᴀʙʟᴇ - ꜰᴜʟʟ ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ")
     else:
-        print("⚠️ scipy not available - basic audio processing only")
+        print("⚠️ ꜱᴄɪᴘʏ ɴᴏᴛ ᴀᴠᴀɪʟᴀʙʟᴇ - ʙᴀꜱɪᴄ ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ ᴏɴʟʏ")
 
     await bot_app.start()
-    print("✅ Bot started successfully")
+    print("✅ ʙᴏᴛ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
 
     try:
         await call_py.start()
-        print("✅ PyTgCalls started successfully")
+        print("✅ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
     except Exception as e:
-        print(f"⚠️ PyTgCalls start failed (user session error): {e}")
-        print("   Bot will still run for bot commands!")
+        print(f"⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛ ꜰᴀɪʟᴇᴅ (ᴜꜱᴇʀ ꜱᴇꜱꜱɪᴏɴ ᴇʀʀᴏʀ): {e}")
+        print("   ʙᴏᴛ ᴡɪʟʟ ꜱᴛɪʟʟ ʀᴜɴ ꜰᴏʀ ʙᴏᴛ ᴄᴏᴍᴍᴀɴᴅꜱ!")
 
-    # Running loop exists here, so this is safe now.
+    # Resume pending join monitors
     asyncio.create_task(resume_pending_joins())
-    print("🔄 Pending join monitors resumed")
+    print("🔄 ᴘᴇɴᴅɪɴɢ ᴊᴏɪɴ ᴍᴏɴɪᴛᴏʀꜱ ʀᴇꜱᴜᴍᴇᴅ")
 
-    print("\n✅ Online! Use /record then /join")
-    print("📌 Owner: /approve, /disapprove, /userlist, /restart")
-    print("📌 Audio: /level, /bass, /treble, /gain, /effects")
-    print("📌 Extra: /ping, /stats, /joinlink\n")
+    print("\n✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
+    print("📌 ᴏᴡɴᴇʀ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ")
+    print("📌 ᴀᴜᴅɪᴏ: /ʟᴇᴠᴇʟ, /ʙᴀꜱꜱ, /ᴛʀᴇʙʟᴇ, /ɢᴀɪɴ, /ᴇꜰꜰᴇᴄᴛꜱ")
+    print("📌 ᴇxᴛʀᴀ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ, /ᴊᴏɪɴʟɪɴᴋ\n")
 
     _idle = idle()
     if asyncio.iscoroutine(_idle):
@@ -3803,32 +3804,37 @@ async def main():
 
 async def _shutdown():
     """Leave calls, stop clients, and save state."""
-    print("🔄 Cleaning up calls...")
+    print("🔄 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ ᴄᴀʟʟꜱ...")
+    
     for chat in list(forward_chats):
         try:
             await call_py.leave_call(chat)
-            print(f"   ✅ Left chat: {chat}")
+            print(f"   ✅ ʟᴇꜰᴛ ᴄʜᴀᴛ: {chat}")
         except Exception as e:
-            print(f"   ⚠️ Couldn't leave {chat}: {e}")
+            print(f"   ⚠️ ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ {chat}: {e}")
+    
     try:
         await call_py.leave_call(RECORD_SOURCE)
-        print(f"   ✅ Left source: {RECORD_SOURCE}")
+        print(f"   ✅ ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}")
     except Exception as e:
-        print(f"   ⚠️ Couldn't leave source: {e}")
+        print(f"   ⚠️ ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ: {e}")
+    
     try:
         await call_py.stop()
-        print("   ✅ PyTgCalls stopped")
+        print("   ✅ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘᴘᴇᴅ")
     except Exception as e:
-        print(f"   ⚠️ PyTgCalls stop error: {e}")
+        print(f"   ⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
+    
     try:
         if getattr(bot_app, "is_connected", False):
             await bot_app.stop()
-        print("   ✅ Bot stopped")
+        print("   ✅ ʙᴏᴛ ꜱᴛᴏᴘᴘᴇᴅ")
     except Exception as e:
-        print(f"   ⚠️ Bot stop error: {e}")
+        print(f"   ⚠️ ʙᴏᴛ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
+    
     save_state()
     save_pending_joins()
-    print("   ✅ State saved")
+    print("   ✅ ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
 
 
 if __name__ == "__main__":
@@ -3837,14 +3843,14 @@ if __name__ == "__main__":
     try:
         loop.run_until_complete(main())
     except KeyboardInterrupt:
-        print("\n🛑 Shutting down...")
+        print("\n🛑 ꜱʜᴜᴛᴛɪɴɢ ᴅᴏᴡɴ...")
     except Exception as e:
-        print(f"❌ Fatal error: {e}")
+        print(f"❌ ꜰᴀᴛᴀʟ ᴇʀʀᴏʀ: {e}")
     finally:
         try:
             loop.run_until_complete(_shutdown())
         except Exception as e:
-            print(f"   ❌ Cleanup error: {e}")
+            print(f"   ❌ ᴄʟᴇᴀɴᴜᴘ ᴇʀʀᴏʀ: {e}")
         finally:
             try:
                 loop.close()
