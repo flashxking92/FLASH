@@ -17,6 +17,8 @@ if hasattr(sys.stderr, "reconfigure"):
 import numpy as np
 import os
 import re
+import subprocess
+import signal as os_signal
 from typing import Optional, Tuple, Dict
 import json
 import logging
@@ -48,7 +50,7 @@ from pytgcalls.types import (
     RecordStream,
     StreamFrames
 )
-from pytgcalls.types.raw import AudioParameters
+from pytgcalls.types.raw import AudioParameters, VideoParameters
 from pytgcalls.exceptions import NoActiveGroupCall
 
 # ==================== ᴄᴏɴꜰɪɢᴜʀᴀᴛɪᴏɴ ====================
@@ -70,6 +72,18 @@ logging.getLogger("pyrogram").setLevel(logging.WARNING)
 logging.getLogger("pytgcalls").setLevel(logging.WARNING)
 
 AUDIO_PARAMETERS = AudioParameters(bitrate=48000, channels=2)
+VIDEO_PARAMETERS = VideoParameters(width=1280, height=720, frame_rate=15)
+
+# ==================== ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴄᴏɴꜰɪɢ ====================
+SCREENSHARE_CONFIG = {
+    "width": 1280,
+    "height": 720,
+    "fps": 15,
+    "bitrate": "1500k",
+    "display": ":0.0",  # X11 display (Linux)
+}
+
+screen_shares = {}  # chat_id -> {"process": subprocess, "task": asyncio.Task, "title": str}
 
 # ==================== ᴄʟɪᴇɴᴛꜱ ====================
 bot_app = Client("bot_session_v5", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
@@ -121,6 +135,8 @@ def save_state():
     """ᴘᴇʀꜱɪꜱᴛ ᴀᴘᴘʀᴏᴠᴇᴅ ᴜꜱᴇʀꜱ ᴀɴᴅ ᴀᴜᴅɪᴏ ᴄᴏɴꜰɪɢ ᴛᴏ ᴅɪꜱᴋ"""
     try:
         tmp = f"{STATE_FILE}.tmp"
+        # 🔥 Screen share IDs only (process objects can't be serialized)
+        screenshare_ids = sorted(screen_shares.keys())
         with open(tmp, "w") as f:
             json.dump({
                 "approved_users": sorted(approved_users),
@@ -128,7 +144,9 @@ def save_state():
                 "advanced_audio_config": ADVANCED_AUDIO_CONFIG,
                 "record_source": RECORD_SOURCE,
                 "forward_chats": sorted(forward_chats),
-                "auto_mute_enabled": auto_mute_enabled,  # ← ADDED
+                "auto_mute_enabled": auto_mute_enabled,
+                "screenshare_ids": screenshare_ids,
+                "screenshare_config": SCREENSHARE_CONFIG,
             }, f, indent=2)
         os.replace(tmp, STATE_FILE)
     except Exception as e:
@@ -136,7 +154,7 @@ def save_state():
 
 def load_state():
     """ʟᴏᴀᴅ ᴘᴇʀꜱɪꜱᴛᴇᴅ ꜱᴛᴀᴛᴇ ɪꜰ ᴀᴠᴀɪʟᴀʙʟᴇ"""
-    global RECORD_SOURCE, auto_mute_enabled  # ← ADDED auto_mute_enabled
+    global RECORD_SOURCE, auto_mute_enabled, VIDEO_PARAMETERS  # ← ADDED auto_mute_enabled
     try:
         with open(STATE_FILE, "r") as f:
             data = json.load(f)
@@ -158,6 +176,15 @@ def load_state():
             forward_chats.update(int(cid) for cid in saved_forwards)
         
         auto_mute_enabled = data.get("auto_mute_enabled", False)  # ← ADDED
+        
+        # Load screenshare config
+        saved_ss_config = data.get("screenshare_config")
+        if isinstance(saved_ss_config, dict):
+            SCREENSHARE_CONFIG.update(saved_ss_config)
+            VID = SCREENSHARE_CONFIG
+            VIDEO_PARAMETERS = VideoParameters(
+                width=VID["width"], height=VID["height"], frame_rate=VID["fps"]
+            )
         
         logger.info(f"ʟᴏᴀᴅᴇᴅ ꜱᴛᴀᴛᴇ: {len(approved_users)} ᴀᴘᴘʀᴏᴠᴇᴅ ᴜꜱᴇʀ(ꜱ), ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}")
     except FileNotFoundError:
@@ -205,7 +232,7 @@ def get_uptime():
         return f"{seconds}ꜱ"
 
 def create_progress_bar(value, max_val, length=12):
-    """ᴄʀᴇᴀᴛᴇ ᴀ ᴠɪꜱᴜᴀʟ ᴘʀᴏɢʀᴇꜱꜱ ʙᴀʀ"""
+    """ᴄʀᴇ��ᴛᴇ ᴀ ᴠɪꜱᴜᴀʟ ᴘʀᴏɢʀᴇꜱꜱ ʙᴀʀ"""
     if not max_val:
         max_val = 1
     filled = int((value / max_val) * length)
@@ -1335,7 +1362,7 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
         ], row_width=1)
         await callback_query.edit_message_text(stats_msg, reply_markup=keyboard)
     
-    # ──────────────────────────────────────────────────────
+    # ───────────��──────────────────────────────────────────
     # ʙᴀᴄᴋ ᴛᴏ ᴜꜱᴇʀʟɪꜱᴛ
     # ──────────────────────────────────────────────────────
     elif data == "back_userlist":
@@ -1443,7 +1470,7 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
         username = f"@{user.username}" if user.username else ""
         
         welcome_text = f"""
-✨ **ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅᴇʀ** ✨
+✨ **ᴡᴇʟ���ᴏᴍᴇ ᴛᴏ ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅᴇʀ** ✨
 ────────────────────
 👋 **ʜᴇʟʟᴏ, {first_name}!**
 {last_name}
@@ -1508,7 +1535,7 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
             "🔗 [ᴘʀᴏꜰɪʟᴇ ʟɪɴᴋ](t.me/Why_not_ZarKo)\n\n"
             "💡 **ꜰᴏʀ ꜱᴜᴘᴘᴏʀᴛ ᴏʀ Qᴜᴇʀɪᴇꜱ:**\n"
             "• ᴅᴍ ᴏɴ ᴛᴇʟᴇɢʀᴀᴍ\n"
-            "• ᴜꜱᴇ /ʜᴇʟᴘ ꜰᴏʀ ᴄᴏᴍᴍᴀɴᴅꜱ",
+            "• ᴜꜱᴇ /��ᴇʟᴘ ꜰᴏʀ ᴄᴏᴍᴍᴀɴᴅꜱ",
             reply_markup=keyboard,
             disable_web_page_preview=True
         )
@@ -1521,7 +1548,7 @@ async def cmd_start(client, message):
     """ꜱᴛᴀʀᴛ ᴄᴏᴍᴍᴀɴᴅ ᴡɪᴛʜ ʙᴜᴛᴛᴏɴꜱ"""
     user_id = message.from_user.id if message.from_user else None
     
-    # 🔐 ᴀᴜᴛʜᴇɴᴛɪᴄᴀᴛɪᴏɴ - ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ
+    # 🔐 ᴀᴜᴛʜᴇɴᴛɪᴄᴀᴛɪᴏɴ - ꜱɪʟᴇɴ��� ɪɢɴᴏʀᴇ
     if user_id != OWNER_ID and user_id not in approved_users:
         logger.info(f"ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ /ꜱᴛᴀʀᴛ ꜰʀᴏᴍ {user_id}")
         return
@@ -1594,6 +1621,11 @@ async def cmd_help(client, message):
 /leaverecord - ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ
 /mute - ᴍᴜᴛᴇ
 /unmute - ᴜɴᴍᴜᴛᴇ
+/automute - ᴀᴜᴛᴏ ᴍᴜᴛᴇ ᴏɴ/ᴏꜰꜰ
+────────────────────
+🖥️ **ꜱᴄʀᴇᴇɴ ꜱʜᴀʀᴇ**
+/screenshare on - ꜱᴛᴀʀᴛ ꜱᴄʀᴇᴇɴ ꜱʜᴀʀᴇ
+/screenshare off - ꜱᴛᴏᴘ ꜱᴄʀᴇᴇɴ ꜱʜᴀʀᴇ
 ────────────────────
 🎛️ **ᴇꜰꜰᴇᴄᴛꜱ**
 /level <0-200> - ᴠᴏʟᴜᴍᴇ
@@ -1704,7 +1736,7 @@ async def cmd_record(client, message):
     try:
         status_msg = await message.reply(
             "🔄 **ꜱᴛᴀʀᴛɪɴɢ ʀᴇᴄᴏʀᴅɪɴɢ...**\n\n"
-            "📡 ᴄᴏɴɴᴇᴄᴛɪɴɢ ᴛᴏ ꜱᴏᴜʀᴄᴇ..."
+            "📡 ᴄᴏɴɴᴇ��ᴛɪɴɢ ᴛᴏ ꜱᴏᴜʀᴄᴇ..."
         )
         success, error = await join_call_safe(RECORD_SOURCE)
         if success:
@@ -1756,7 +1788,7 @@ async def cmd_join(client, message):
             await message.reply(
                 "⚠️ **ᴄᴀɴɴᴏᴛ CHUDAI ᴛᴏ ꜱᴏᴜʀᴄᴇ ᴄʜᴀᴛ!**\n\n"
                 f"📡 **ꜱᴏᴜʀᴄᴇ:** `{RECORD_SOURCE}`\n"
-                "💡 ᴜꜱᴇ ᴀ ᴅɪꜰꜰᴇʀᴇɴᴛ ᴄʜᴀᴛ ꜰᴏʀ ꜰᴏʀᴡᴀʀᴅɪɴɢ"
+                "💡 ᴜꜱᴇ ᴀ ᴅɪꜰꜰᴇʀᴇɴᴛ ᴄʜᴀᴛ ���ᴏʀ ꜰᴏʀᴡᴀʀᴅɪɴɢ"
             )
             return
         status_msg = await message.reply(
@@ -1881,7 +1913,7 @@ async def cmd_rejoin(client, message):
                 success, error = await join_call_safe(chat_id)
                 if success:
                     rejoin_results["forwards"]["success"] += 1
-                    logger.info(f"ʀᴇᴊᴏɪɴᴇᴅ ꜰᴏʀᴡᴀʀᴅ ᴄʜᴀᴛ {chat_id} ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
+                    logger.info(f"ʀᴇᴊᴏɪɴᴇᴅ ꜰᴏʀᴡ���ʀᴅ ᴄʜᴀᴛ {chat_id} ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
                 else:
                     rejoin_results["forwards"]["failed"] += 1
                     rejoin_results["forwards"]["errors"].append(f"`{chat_id}`: {error[:50]}")
@@ -1932,7 +1964,7 @@ async def cmd_rejoin(client, message):
 • **ʀᴇᴄᴏʀᴅɪɴɢ:** {'🟢 ᴀᴄᴛɪᴠᴇ' if is_recording else '🔴 ɪɴᴀᴄᴛɪᴠᴇ'}
 • **ꜰᴏʀᴡᴀʀᴅɪɴɢ:** {len(forward_chats)} ᴄʜᴀᴛꜱ
 • **ᴀᴜᴅɪᴏ:** {'🔇 ᴍᴜᴛᴇᴅ' if is_muted else '🔊 ʟɪᴠᴇ'}
-────────────────────
+──────────��─────────
 
 💡 **ɴᴏᴛᴇ:** ꜰᴀɪʟᴇᴅ ᴄʜᴀᴛꜱ ᴡᴇʀᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ʀᴇᴍᴏᴠᴇᴅ ꜰʀᴏᴍ ꜰᴏʀᴡᴀʀᴅɪɴɢ ʟɪꜱᴛ
 """
@@ -1951,7 +1983,7 @@ async def cmd_leaverecord(client, message):
         await call_py.leave_call(RECORD_SOURCE)
         is_recording = False
         leave_msg = f"""
-✅ **ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ ɢʀᴏᴜᴘ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**
+✅ **ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ ɢʀᴏᴜᴘ ꜱᴜᴄᴄᴇꜱ��ꜰᴜʟʟʏ!**
 
 ────────────────────
 📡 **ꜱᴏᴜʀᴄᴇ:** `{RECORD_SOURCE}`
@@ -2558,7 +2590,7 @@ async def cmd_advanced(client, message):
 • **ꜱᴀᴛ** (ꜱᴏꜰᴛ ꜱᴀᴛᴜʀᴀᴛɪᴏɴ): `{adv['saturation']:+.0f}` {get_bar(adv['saturation'])} {get_status(adv['saturation'])}
 • **ꜱᴛ** (ꜱᴛᴇʀᴇᴏ ᴡɪᴅᴛʜ): `{adv['stereo_width']:+.0f}` {get_bar(adv['stereo_width'])} {get_status(adv['stereo_width'])}
 
-────────────────────
+──���──────────────��──
 📌 **ᴜꜱᴀɢᴇ:** `/a1 <ᴇꜰꜰᴇᴄᴛ> <ᴠᴀʟᴜᴇ>`
 
 **ᴇꜰꜰᴇᴄᴛꜱ:**
@@ -2568,7 +2600,7 @@ async def cmd_advanced(client, message):
 • `eq`   - ᴘʀᴇꜱᴇɴᴄᴇ ᴇQ (-50 ᴛᴏ +50)
 • `loud` - ʟᴏᴜᴅɴᴇꜱꜱ ɴᴏʀᴍ (-50 ᴛᴏ +50)
 • `lim`  - ʟɪᴍɪᴛᴇʀ (-50 ᴛᴏ +50)
-• `gate` - ɴᴏɪꜱᴇ ɢᴀᴛᴇ (-50 ᴛᴏ +50)
+• `gate` - ɴᴏɪꜱᴇ ɢᴀᴛᴇ (-50 ���ᴏ +50)
 • `dc`   - ᴅᴄ ᴏꜰꜰꜱᴇᴛ (-50 ᴛᴏ +50)
 • `sat`  - ꜱᴀᴛᴜʀᴀᴛɪᴏɴ (-50 ᴛᴏ +50)
 • `st`   - ꜱᴛᴇʀᴇᴏ ᴡɪᴅᴛʜ (-50 ᴛᴏ +50)
@@ -2930,7 +2962,7 @@ async def cmd_setrecordgroup(client, message):
             try:
                 await call_py.leave_call(old_source)
                 is_recording = False
-                logger.info(f"ʟᴇꜰᴛ ᴏʟᴅ ꜱᴏᴜʀᴄᴇ: {old_source}")
+                logger.info(f"ʟᴇꜰᴛ ᴏʟ�� ꜱᴏᴜʀᴄᴇ: {old_source}")
             except Exception as e:
                 logger.warning(f"ᴄᴏᴜʟᴅ ɴᴏᴛ ʟᴇᴀᴠᴇ ᴏʟᴅ ꜱᴏᴜʀᴄᴇ: {e}")
         
@@ -3106,6 +3138,341 @@ async def cmd_restart(client, message):
 # ==================== ʀᴇꜱᴛᴀʀᴛ ᴄᴏᴍᴍᴀɴᴅ ᴇɴᴅꜱ ====================        
 
 
+
+
+
+# ==================== ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜰᴜɴᴄᴛɪᴏɴꜱ ====================
+
+async def _screenshare_frame_sender(chat_id, process):
+    """Read raw video frames from ffmpeg stdout and send to voice chat"""
+    frame_size = SCREENSHARE_CONFIG["width"] * SCREENSHARE_CONFIG["height"] * 3 // 2  # YUV420p
+    logger.info(f"🖥️ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴛᴀʀᴛᴇᴅ ꜰᴏʀ {chat_id} | {SCREENSHARE_CONFIG['width']}x{SCREENSHARE_CONFIG['height']} @ {SCREENSHARE_CONFIG['fps']}fps")
+    try:
+        while chat_id in screen_shares and process and process.poll() is None:
+            try:
+                raw_frame = await asyncio.get_event_loop().run_in_executor(
+                    None, process.stdout.read, frame_size
+                )
+                if not raw_frame or len(raw_frame) < frame_size:
+                    if process.poll() is not None:
+                        logger.warning(f"ffmpeg process exited for {chat_id}")
+                        break
+                    await asyncio.sleep(0.1)
+                    continue
+                await call_py.send_frame(chat_id, Device.CAMERA, raw_frame)
+                await asyncio.sleep(1.0 / SCREENSHARE_CONFIG["fps"])
+            except Exception as e:
+                logger.debug(f"ꜰʀᴀᴍᴇ ꜱᴇɴᴅ ᴇʀʀᴏʀ ꜰᴏʀ {chat_id}: {e}")
+                break
+    except Exception as e:
+        logger.error(f"ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴇɴᴅᴇʀ ᴇʀʀᴏʀ ꜰᴏʀ {chat_id}: {e}")
+    finally:
+        # Cleanup on exit
+        if chat_id in screen_shares:
+            logger.info(f"🖥️ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴇɴᴅᴇᴅ ꜰᴏʀ {chat_id}")
+            del screen_shares[chat_id]
+        try:
+            if process and process.poll() is None:
+                process.terminate()
+                process.wait(timeout=3)
+        except Exception:
+            try:
+                if process:
+                    process.kill()
+            except Exception:
+                pass
+        try:
+            await call_py.leave_call(chat_id)
+        except Exception:
+            pass
+        save_state()
+
+async def start_screenshare(chat_id, chat_title="ᴜɴᴋɴᴏᴡɴ"):
+    """Start screen sharing to a voice chat using ffmpeg"""
+    if chat_id in screen_shares:
+        return False, "ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴀʟʀᴇᴀᴅʏ ᴀᴄᴛɪᴠᴇ ɪɴ ᴛʜɪꜱ ᴄʜᴀᴛ"
+    
+    try:
+        # Connect to the voice chat first
+        success, error = await join_call_safe(chat_id)
+        if not success:
+            return False, f"ᴊᴏɪɴ ꜰᴀɪʟᴇᴅ: {error}"
+        
+        # Start video stream via PyTgCalls
+        await call_py.play(
+            chat_id,
+            MediaStream(ExternalMedia.VIDEO, VIDEO_PARAMETERS),
+        )
+        
+        # Build ffmpeg command to capture screen and output raw YUV420p
+        w = SCREENSHARE_CONFIG["width"]
+        h = SCREENSHARE_CONFIG["height"]
+        fps = SCREENSHARE_CONFIG["fps"]
+        display = SCREENSHARE_CONFIG.get("display", ":0.0")
+        
+        ffmpeg_cmd = [
+            "ffmpeg",
+            "-f", "x11grab",
+            "-framerate", str(fps),
+            "-video_size", f"{w}x{h}",
+            "-i", display,
+            "-f", "rawvideo",
+            "-pix_fmt", "yuv420p",
+            "-an",  # No audio
+            "-loglevel", "error",
+            "pipe:1"
+        ]
+        
+        process = subprocess.Popen(
+            ffmpeg_cmd,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            stdin=subprocess.DEVNULL,
+        )
+        
+        # Start frame sender task
+        task = asyncio.create_task(_screenshare_frame_sender(chat_id, process))
+        
+        screen_shares[chat_id] = {
+            "process": process,
+            "task": task,
+            "title": chat_title
+        }
+        
+        save_state()
+        logger.info(f"🖥️ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴛᴀʀᴛᴇᴅ ꜰᴏʀ {chat_id} ({chat_title})")
+        return True, None
+        
+    except Exception as e:
+        logger.error(f"ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴛᴀʀᴛ ᴇʀʀᴏʀ: {e}")
+        return False, str(e)
+
+async def stop_screenshare(chat_id):
+    """Stop screen sharing in a specific chat"""
+    if chat_id not in screen_shares:
+        return False, "ɴᴏ ᴀᴄᴛɪᴠᴇ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ɪɴ ᴛʜɪꜱ ᴄʜᴀᴛ"
+    
+    try:
+        info = screen_shares[chat_id]
+        process = info["process"]
+        task = info["task"]
+        
+        # Cancel the async task
+        if task and not task.done():
+            task.cancel()
+        
+        # Terminate ffmpeg process
+        if process and process.poll() is None:
+            process.terminate()
+            try:
+                process.wait(timeout=3)
+            except subprocess.TimeoutExpired:
+                process.kill()
+        
+        # Leave the call
+        try:
+            await call_py.leave_call(chat_id)
+        except Exception:
+            pass
+        
+        del screen_shares[chat_id]
+        save_state()
+        logger.info(f"🖥️ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴛᴏᴘᴘᴇᴅ ꜰᴏʀ {chat_id}")
+        return True, None
+        
+    except Exception as e:
+        logger.error(f"ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
+        return False, str(e)
+# ==================== ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴄᴏᴍᴍᴀɴᴅ ====================
+
+@bot_app.on_message(pyro_filters.command("screenshare") & authorized_only())
+async def cmd_screenshare(client, message):
+    """ꜱᴄʀᴇᴇɴ ꜱʜᴀʀᴇ ᴄᴏɴᴛʀᴏʟ - /screenshare on|off"""
+    parts = message.text.split()
+    
+    if len(parts) < 2:
+        await message.reply(
+            "🖥️ **ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴄᴏɴᴛʀᴏʟ**\n\n"
+            "📌 **ᴜꜱᴀɢᴇ:**\n"
+            "• `/screenshare on` - ꜱᴛᴀʀᴛ ꜱᴄʀᴇᴇɴ ꜱʜᴀʀᴇ\n"
+            "• `/screenshare off` - ꜱᴛᴏᴘ ꜱᴄʀᴇᴇɴ ꜱʜᴀʀᴇ\n\n"
+            f"📊 **ᴀᴄᴛɪᴠᴇ ꜱʜᴀʀᴇꜱ:** {len(screen_shares)}"
+        )
+        return
+    
+    mode = parts[1].lower()
+    
+    # ===== SCREENSHARE ON =====
+    if mode == "on":
+        if not forward_chats:
+            await message.reply(
+                "📭 **ɴᴏ ᴊᴏɪɴᴇᴅ ᴄʜᴀᴛꜱ ꜰᴏᴜɴᴅ!**\n\n"
+                "💡 ᴘᴇʜʟᴇ `/join <chat_id>` ꜱᴇ ᴄʜᴀᴛ ᴊᴏɪɴ ᴋᴀʀᴏ"
+            )
+            return
+        
+        buttons = []
+        for cid in sorted(forward_chats):
+            if cid in screen_shares:
+                label = f"🟢 {cid} (ᴀᴄᴛɪᴠᴇ)"
+            else:
+                label = f"📱 {cid}"
+            buttons.append((label, f"ss_on_{cid}", ButtonStyle.PRIMARY))
+        
+        buttons.append(("❌ ᴄᴀɴᴄᴇʟ", "ss_cancel_on", ButtonStyle.DANGER))
+        keyboard = build_keyboard(buttons, row_width=1)
+        
+        await message.reply(
+            "🖥️ **ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴏɴ**\n\n"
+            "📌 **ꜱᴇʟᴇᴄᴛ ᴄʜᴀᴛ ᴛᴏ ꜱᴛᴀʀᴛ ꜱᴄʀᴇᴇɴ ꜱʜᴀʀᴇ:**\n\n"
+            f"📊 **ᴛᴏᴛᴀʟ ᴊᴏɪɴᴇᴅ ᴄʜᴀᴛꜱ:** {len(forward_chats)}\n"
+            f"🟢 **ᴀʟʀᴇᴀᴅʏ ꜱʜᴀʀɪɴɢ:** {len(screen_shares)}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=keyboard
+        )
+    
+    # ===== SCREENSHARE OFF =====
+    elif mode == "off":
+        if not screen_shares:
+            await message.reply(
+                "📭 **ɴᴏ ᴀᴄᴛɪᴠᴇ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇꜱ!**\n\n"
+                "💡 ᴜꜱᴇ `/screenshare on` ᴛᴏ ꜱᴛᴀʀᴛ"
+            )
+            return
+        
+        buttons = []
+        for cid, info in screen_shares.items():
+            title = info.get("title", str(cid))
+            buttons.append((f"🖥️ {title} ({cid})", f"ss_off_{cid}", ButtonStyle.DANGER))
+        
+        buttons.append(("❌ ᴄᴀɴᴄᴇʟ", "ss_cancel_off", ButtonStyle.PRIMARY))
+        keyboard = build_keyboard(buttons, row_width=1)
+        
+        await message.reply(
+            "🔴 **ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴏꜰꜰ**\n\n"
+            "📌 **ꜱᴇʟᴇᴄᴛ ᴄʜᴀᴛ ᴛᴏ ꜱᴛᴏᴘ:**\n\n"
+            f"📊 **ᴀᴄᴛɪᴠᴇ ꜱʜᴀʀᴇꜱ:** {len(screen_shares)}",
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=keyboard
+        )
+    
+    else:
+        await message.reply(
+            "❌ **ɪɴᴠᴀʟɪᴅ!**\n\n"
+            "📌 ᴜꜱᴇ `/screenshare on` ᴏʀ `/screenshare off`"
+        )
+
+# ==================== ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴄᴀʟʟʙᴀᴄᴋ ====================
+
+@bot_app.on_callback_query(pyro_filters.regex(r"^ss_"))
+async def screenshare_callbacks(client, callback_query: CallbackQuery):
+    """Handle screenshare on/off callback selections"""
+    data = callback_query.data
+    user_id = callback_query.from_user.id
+    
+    if user_id != OWNER_ID and user_id not in approved_users:
+        await callback_query.answer("⛔ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ!", show_alert=True)
+        return
+    
+    await callback_query.answer()
+    
+    # ─────── SCREENSHARE ON: SELECT CHAT ───────
+    if data.startswith("ss_on_"):
+        chat_id_str = data.replace("ss_on_", "")
+        try:
+            chat_id = int(chat_id_str)
+        except ValueError:
+            await callback_query.edit_message_text("❌ **ɪɴᴠᴀʟɪᴅ ᴄʜᴀᴛ ɪᴅ!**")
+            return
+        
+        if chat_id in screen_shares:
+            await callback_query.edit_message_text(
+                f"🟢 **ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴀʟʀᴇᴀᴅʏ ᴀᴄᴛɪᴠᴇ!**\n\n🎯 **ᴄʜᴀᴛ:** `{chat_id}`\n\n"
+                "💡 ᴜꜱᴇ `/screenshare off` ᴛᴏ ꜱᴛᴏᴘ"
+            )
+            return
+        
+        chat_title = str(chat_id)
+        try:
+            chat = await user_app.get_chat(chat_id)
+            chat_title = chat.title if hasattr(chat, 'title') else str(chat_id)
+        except Exception:
+            pass
+        
+        await callback_query.edit_message_text(
+            f"🔄 **ꜱᴛᴀʀᴛɪɴɢ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ...**\n\n"
+            f"🎯 **ᴄʜᴀᴛ:** `{chat_id}` ({chat_title})\n"
+            f"📐 **ʀᴇꜱ:** {SCREENSHARE_CONFIG['width']}x{SCREENSHARE_CONFIG['height']}\n"
+            f"🎬 **ꜰᴘꜱ:** {SCREENSHARE_CONFIG['fps']}\n\n"
+            "📡 ᴄᴏɴɴᴇᴄᴛɪɴɢ ᴀɴᴅ ᴄᴀᴘᴛᴜʀɪɴɢ ꜱᴄʀᴇᴇɴ..."
+        )
+        
+        success, error = await start_screenshare(chat_id, chat_title)
+        
+        if success:
+            await callback_query.edit_message_text(
+                f"✅ **ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴛᴀʀᴛᴇᴅ!**\n\n"
+                f"🎯 **ᴄʜᴀᴛ:** `{chat_id}` ({chat_title})\n"
+                f"📐 **ʀᴇꜱ:** {SCREENSHARE_CONFIG['width']}x{SCREENSHARE_CONFIG['height']}\n"
+                f"🎬 **ꜰᴘꜱ:** {SCREENSHARE_CONFIG['fps']}\n"
+                f"📊 **ꜱᴛᴀᴛᴜꜱ:** 🟢 ʟɪᴠᴇ\n\n"
+                f"💡 **ᴛᴏᴛᴀʟ ᴀᴄᴛɪᴠᴇ:** {len(screen_shares)}\n"
+                "🔴 ᴜꜱᴇ `/screenshare off` ᴛᴏ ꜱᴛᴏᴘ"
+            )
+        else:
+            await callback_query.edit_message_text(
+                f"❌ **ꜰᴀɪʟᴇᴅ!**\n\n"
+                f"⚠️ **ᴇʀʀᴏʀ:** `{error}`\n\n"
+                "💡 ᴍᴀᴋᴇ ꜱᴜʀᴇ:\n"
+                "• ᴄʜᴀᴛ ɪꜱ ᴀᴄᴛɪᴠᴇ\n"
+                "• ʙᴏᴛ ɪꜱ ɪɴ ᴛʜᴇ ᴄʜᴀᴛ\n"
+                "• ᴠᴏɪᴄᴇ ᴄʜᴀᴛ ɪꜱ ʀᴜɴɴɪɴɢ\n"
+                "• X11 ᴅɪꜱᴘʟᴀʏ ɪꜱ ᴀᴄᴄᴇꜱꜱɪʙʟᴇ"
+            )
+    
+    # ─────── SCREENSHARE OFF: SELECT CHAT ───────
+    elif data.startswith("ss_off_"):
+        chat_id_str = data.replace("ss_off_", "")
+        try:
+            chat_id = int(chat_id_str)
+        except ValueError:
+            await callback_query.edit_message_text("❌ **ɪɴᴠᴀʟɪᴅ ᴄʜᴀᴛ ɪᴅ!**")
+            return
+        
+        if chat_id not in screen_shares:
+            await callback_query.edit_message_text(
+                f"ℹ️ **ɴᴏ ᴀᴄᴛɪᴠᴇ ꜱʜᴀʀᴇ ɪɴ ᴛʜɪꜱ ᴄʜᴀᴛ!**\n\n🎯 `{chat_id}`"
+            )
+            return
+        
+        info = screen_shares.get(chat_id, {})
+        chat_title = info.get("title", str(chat_id))
+        
+        await callback_query.edit_message_text(
+            f"🔄 **ꜱᴛᴏᴘᴘɪɴɢ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ...**\n\n"
+            f"🎯 **ᴄʜᴀᴛ:** `{chat_id}` ({chat_title})"
+        )
+        
+        success, error = await stop_screenshare(chat_id)
+        
+        if success:
+            await callback_query.edit_message_text(
+                f"✅ **ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴛᴏᴘᴘᴇᴅ!**\n\n"
+                f"🎯 **ᴄʜᴀᴛ:** `{chat_id}` ({chat_title})\n"
+                f"📊 **ꜱᴛᴀᴛᴜꜱ:** 🔴 ꜱᴛᴏᴘᴘᴇᴅ\n"
+                f"📊 **ʀᴇᴍᴀɪɴɪɴɢ:** {len(screen_shares)} ᴀᴄᴛɪᴠᴇ"
+            )
+        else:
+            await callback_query.edit_message_text(
+                f"⚠️ **ɪꜱꜱᴜᴇ:** `{error}`"
+            )
+    
+    # ─────── CANCEL ───────
+    elif data in ("ss_cancel_on", "ss_cancel_off"):
+        try:
+            await callback_query.message.delete()
+        except Exception:
+            await callback_query.edit_message_text("✅ **ᴄᴀɴᴄᴇʟʟᴇᴅ**")
 
 # ==================== ᴘᴀɴᴇʟ ᴄᴏᴍᴍᴀɴᴅ ====================
 
@@ -3474,6 +3841,7 @@ if __name__ == "__main__":
         print("📌 ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ")
         print("📌 ᴀᴜᴅɪᴏ ᴄᴏᴍᴍᴀɴᴅꜱ: /ʟᴇᴠᴇʟ, /ʙᴀꜱꜱ, /ᴛʀᴇʙʟᴇ, /ɢᴀɪɴ, /ᴇꜰꜰᴇᴄᴛꜱ")
         print("📌 ᴇxᴛʀᴀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ")
+        print("📌 ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ: /screenshare on, /screenshare off")
         print("⚠️ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ ɢᴇᴛ ɴᴏ ʀᴇꜱᴘᴏɴꜱᴇ (ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ)\n")
         
         # Idle (blocks until interrupted)
@@ -3488,6 +3856,19 @@ if __name__ == "__main__":
     finally:
         # ==================== CLEANUP ====================
         print("\n🧹 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ...")
+        
+        # Stop all active screenshares
+        for ss_chat in list(screen_shares.keys()):
+            try:
+                info = screen_shares[ss_chat]
+                proc = info.get("process")
+                if proc and proc.poll() is None:
+                    proc.terminate()
+                    proc.wait(timeout=2)
+                print(f"    ꜱᴛᴏᴘᴘᴇᴅ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ: {ss_chat}")
+            except Exception as e:
+                print(f"    ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴄʟᴇᴀɴᴜᴘ ᴇʀʀᴏʀ {ss_chat}: {e}")
+        screen_shares.clear()
         
         # Leave all forward chats
         for chat in list(forward_chats):
