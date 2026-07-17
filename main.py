@@ -439,26 +439,26 @@ def process_audio(audio_data):
         # ===== BASIC EFFECTS =====
         
         # 1. Volume Boost
-        if config['volume'] != 100:
-            processed = apply_volume_boost(processed, config['volume'])
+        if config.get('volume', 100) != 100:
+            processed = apply_volume_boost(processed, config.get('volume', 100))
 
         # 2. Bass Boost
-        if config['bass'] > 0:
+        if config.get('bass', 0) > 0:
             if SCIPY_AVAILABLE:
-                processed = apply_bass_boost_advanced(processed, config['bass'])
+                processed = apply_bass_boost_advanced(processed, config.get('bass', 0))
             else:
-                processed = apply_bass_boost_basic(processed, config['bass'])
+                processed = apply_bass_boost_basic(processed, config.get('bass', 0))
 
         # 3. Treble Boost
-        if config['treble'] > 0:
+        if config.get('treble', 0) > 0:
             if SCIPY_AVAILABLE:
-                processed = apply_treble_boost_advanced(processed, config['treble'])
+                processed = apply_treble_boost_advanced(processed, config.get('treble', 0))
             else:
-                processed = apply_treble_boost_basic(processed, config['treble'])
+                processed = apply_treble_boost_basic(processed, config.get('treble', 0))
 
         # 4. Soft Gain
-        if config['gain'] > 0:
-            processed = apply_soft_gain(processed, config['gain'])
+        if config.get('gain', 0) > 0:
+            processed = apply_soft_gain(processed, config.get('gain', 0))
 
         # ===== ADVANCED EFFECTS =====
         # Check if any advanced effect is active
@@ -1715,7 +1715,7 @@ async def cmd_record(client, message):
 
 ────────────────────
 📡 **ꜱᴏᴜʀᴄᴇ:** `{RECORD_SOURCE}`
-📤 **CHUDAI:** {len(forward_chats)} ᴄʜᴀᴛꜱ
+📤 **FORWARDING:** {len(forward_chats)} ᴄʜᴀᴛꜱ
 📊 **ꜱᴛᴀᴛᴜꜱ:** 🟢 ʟɪᴠᴇ
 ────────────────────
 
@@ -1725,7 +1725,7 @@ async def cmd_record(client, message):
             logger.info("ʀᴇᴄᴏʀᴅɪɴɢ ꜱᴛᴀʀᴛᴇᴅ")
         else:
             await status_msg.edit_text(
-                f"❌ **ꜰᴀɪʟᴇᴅ ᴛᴏ ꜱᴛᴀʀᴛ CHUDAI!**\n\n"
+                f"❌ **ꜰᴀɪʟᴇᴅ ᴛᴏ ꜱᴛᴀʀᴛ FORWARDING!**\n\n"
                 f"⚠️ **ᴇʀʀᴏʀ:** `{error}`\n\n"
                 f"💡 ᴍᴀᴋᴇ ꜱᴜʀᴇ ᴄʜᴀᴛ ɪꜱ ᴀᴄᴛɪᴠᴇ"
             )
@@ -1735,6 +1735,7 @@ async def cmd_record(client, message):
 @bot_app.on_message(pyro_filters.command("join") & authorized_only())
 async def cmd_join(client, message):
     """ꜰᴏʀᴡᴀʀᴅ ᴀᴜᴅɪᴏ ᴛᴏ ᴀ ᴄʜᴀᴛ"""
+    global is_muted
     parts = message.text.split()
     if len(parts) < 2:
         join_help = """
@@ -1747,14 +1748,14 @@ async def cmd_join(client, message):
         chat_id = int(chat_id_str)
         if chat_id in forward_chats:
             await message.reply(
-                f"⚠️ **ᴀʟʀᴇᴀᴅʏ CHUDAI ᴛᴏ ᴛʜɪꜱ ᴄʜᴀᴛ!**\n\n"
+                f"⚠️ **ᴀʟʀᴇᴀᴅʏ FORWARDING ᴛᴏ ᴛʜɪꜱ ᴄʜᴀᴛ!**\n\n"
                 f"🎯 `{chat_id}`\n"
                 f"📤 **ᴛᴏᴛᴀʟ:** {len(forward_chats)} ᴄʜᴀᴛꜱ"
             )
             return
         if chat_id == RECORD_SOURCE:
             await message.reply(
-                "⚠️ **ᴄᴀɴɴᴏᴛ CHUDAI ᴛᴏ ꜱᴏᴜʀᴄᴇ ᴄʜᴀᴛ!**\n\n"
+                "⚠️ **ᴄᴀɴɴᴏᴛ FORWARDING ᴛᴏ ꜱᴏᴜʀᴄᴇ ᴄʜᴀᴛ!**\n\n"
                 f"📡 **ꜱᴏᴜʀᴄᴇ:** `{RECORD_SOURCE}`\n"
                 "💡 ᴜꜱᴇ ᴀ ᴅɪꜰꜰᴇʀᴇɴᴛ ᴄʜᴀᴛ ꜰᴏʀ ꜰᴏʀᴡᴀʀᴅɪɴɢ"
             )
@@ -1777,7 +1778,7 @@ async def cmd_join(client, message):
             
             save_state()
             join_msg = f"""
-✅ **CHUDAI ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**
+✅ **FORWARDING ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**
 
 ────────────────────
 🎯 **ᴛᴀʀɢᴇᴛ:** `{chat_id}`
@@ -3456,73 +3457,84 @@ if __name__ == "__main__":
         print("⚠️ ꜱᴄɪᴘʏ ɴᴏᴛ ᴀᴠᴀɪʟᴀʙʟᴇ - ʙᴀꜱɪᴄ ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ ᴏɴʟʏ")
         print("   ɪɴꜱᴛᴀʟʟ ᴡɪᴛʜ: ᴘɪᴘ ɪɴꜱᴛᴀʟʟ ꜱᴄɪᴘʏ\n")
     
-    try:
-        # Start bot
-        bot_app.start()
-        print("✅ ʙᴏᴛ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
-        
-        # Start PyTgCalls (with fallback)
+    async def _main_run():
         try:
-            call_py.start()
-            print("✅ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
-        except Exception as e:
-            print(f"⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛ ꜰᴀɪʟᴇᴅ (User session error): {e}")
-            print("   ʙᴏᴛ ᴡɪʟʟ ꜱᴛɪʟʟ ʀᴜɴ ꜰᴏʀ ʙᴏᴛ ᴄᴏᴍᴍᴀɴᴅꜱ!\n")
+            # Start bot
+            await bot_app.start()
+            print("✅ ʙᴏᴛ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
         
-        # Print help/status
-        print("\n✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
-        print("📌 ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ")
-        print("📌 ᴀᴜᴅɪᴏ ᴄᴏᴍᴍᴀɴᴅꜱ: /ʟᴇᴠᴇʟ, /ʙᴀꜱꜱ, /ᴛʀᴇʙʟᴇ, /ɢᴀɪɴ, /ᴇꜰꜰᴇᴄᴛꜱ")
-        print("📌 ᴇxᴛʀᴀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ")
-        print("⚠️ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ ɢᴇᴛ ɴᴏ ʀᴇꜱᴘᴏɴꜱᴇ (ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ)\n")
-        
-        # Idle (blocks until interrupted)
-        idle()
-        
-    except KeyboardInterrupt:
-        print("\n🛑 ꜱʜᴜᴛᴛɪɴɢ ᴅᴏᴡɴ...")
-    except Exception as e:
-        print(f"❌ ꜰᴀᴛᴀʟ ᴇʀʀᴏʀ: {e}")
-        import traceback
-        traceback.print_exc()
-    finally:
-        # ==================== CLEANUP ====================
-        print("\n🧹 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ...")
-        
-        # Leave all forward chats
-        for chat in list(forward_chats):
+            # Start PyTgCalls (with fallback)
             try:
-                call_py.leave_call(chat)
-                print(f"    ʟᴇꜰᴛ ᴄʜᴀᴛ: {chat}")
+                await call_py.start()
+                print("✅ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
             except Exception as e:
-                print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ {chat}: {e}")
+                print(f"⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛ ꜰᴀɪʟᴇᴅ (User session error): {e}")
+                print("   ʙᴏᴛ ᴡɪʟʟ ꜱᴛɪʟʟ ʀᴜɴ ꜰᴏʀ ʙᴏᴛ ᴄᴏᴍᴍᴀɴᴅꜱ!\n")
         
-        # Leave source chat
-        try:
-            call_py.leave_call(RECORD_SOURCE)
-            print(f"    ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}")
+            # Print help/status
+            print("\n✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
+            print("📌 ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ")
+            print("📌 ᴀᴜᴅɪᴏ ᴄᴏᴍᴍᴀɴᴅꜱ: /ʟᴇᴠᴇʟ, /ʙᴀꜱꜱ, /ᴛʀᴇʙʟᴇ, /ɢᴀɪɴ, /ᴇꜰꜰᴇᴄᴛꜱ")
+            print("📌 ᴇxᴛʀᴀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ")
+            print("⚠️ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ ɢᴇᴛ ɴᴏ ʀᴇꜱᴘᴏɴꜱᴇ (ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ)\n")
+        
+            # Idle (blocks until interrupted)
+            await idle()
+        
+        except KeyboardInterrupt:
+            print("\n🛑 ꜱʜᴜᴛᴛɪɴɢ ᴅᴏᴡɴ...")
         except Exception as e:
-            print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ: {e}")
+            print(f"❌ ꜰᴀᴛᴀʟ ᴇʀʀᴏʀ: {e}")
+            import traceback
+            traceback.print_exc()
+        finally:
+            # ==================== CLEANUP ====================
+            print("\n🧹 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ...")
         
-        # Stop PyTgCalls
+            # Leave all forward chats
+            for chat in list(forward_chats):
+                try:
+                    await call_py.leave_call(chat)
+                    print(f"    ʟᴇꜰᴛ ᴄʜᴀᴛ: {chat}")
+                except Exception as e:
+                    print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ {chat}: {e}")
+        
+            # Leave source chat
+            try:
+                await call_py.leave_call(RECORD_SOURCE)
+                print(f"    ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}")
+            except Exception as e:
+                print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ: {e}")
+        
+            # Stop PyTgCalls
+            try:
+                await call_py.stop()
+                print("    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘᴘᴇᴅ")
+            except Exception as e:
+                print(f"    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
+        
+            # Stop bot
+            try:
+                await bot_app.stop()
+                print("    ʙᴏᴛ ꜱᴛᴏᴘᴘᴇᴅ")
+            except Exception as e:
+                print(f"    ʙᴏᴛ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
+        
+            # Save state
+            try:
+                save_state()
+                print("    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
+            except Exception as e:
+                print(f"    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇ ᴇʀʀᴏʀ: {e}")
+        
+            print("✅ ᴄʟᴇᴀɴᴜᴘ ᴄᴏᴍᴘʟᴇᴛᴇ")
+
+    loop = asyncio.new_event_loop()
+    asyncio.set_event_loop(loop)
+    try:
+        loop.run_until_complete(_main_run())
+    finally:
         try:
-            call_py.stop()
-            print("    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘᴘᴇᴅ")
-        except Exception as e:
-            print(f"    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
-        
-        # Stop bot
-        try:
-            bot_app.stop()
-            print("    ʙᴏᴛ ꜱᴛᴏᴘᴘᴇᴅ")
-        except Exception as e:
-            print(f"    ʙᴏᴛ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
-        
-        # Save state
-        try:
-            save_state()
-            print("    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
-        except Exception as e:
-            print(f"    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇ ᴇʀʀᴏʀ: {e}")
-        
-        print("✅ ᴄʟᴇᴀɴᴜᴘ ᴄᴏᴍᴘʟᴇᴛᴇ")
+            loop.close()
+        except Exception:
+            pass

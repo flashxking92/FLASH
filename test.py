@@ -973,6 +973,44 @@ async def join_call_safe(chat_id):
     except Exception as e:
         return False, str(e)
 
+async def join_video_call_safe(chat_id):
+    """ꜱᴀꜰᴇʟʏ ᴊᴏɪɴ ᴄᴀʟʟ ᴡɪᴛʜ VIDEO ᴍᴏᴅᴇ ꜰᴏʀ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ"""
+    try:
+        if not await cache_chat_info(chat_id):
+            return False, "ᴄʜᴀᴛ ɴᴏᴛ ꜰᴏᴜɴᴅ ᴏʀ ɪɴᴀᴄᴄᴇꜱꜱɪʙʟᴇ"
+        try:
+            # Directly play VIDEO stream - no AUDIO first
+            await call_py.play(
+                chat_id,
+                MediaStream(ExternalMedia.VIDEO, VIDEO_PARAMETERS),
+            )
+            return True, None
+        except NoActiveGroupCall:
+            return False, "ɴᴏ ᴀᴄᴛɪᴠᴇ ᴠᴏɪᴄᴇ ᴄʜᴀᴛ (ᴠᴄ ꜱᴛᴀʀᴛ ᴋᴀʀᴏ)"
+        except Exception as e:
+            error_msg = str(e)
+            if "already participating" in error_msg.lower():
+                return True, None
+            if "video" in error_msg.lower() and "not supported" in error_msg.lower():
+                return False, "ᴠᴏɪᴄᴇ ᴄʜᴀᴛ ᴅᴏᴇꜱ ɴᴏᴛ ꜱᴜᴘᴘᴏʀᴛ ᴠɪᴅᴇᴏ"
+            return False, error_msg
+    except Exception as e:
+        return False, str(e)
+
+def _detect_x11_display():
+    """Auto-detect available X11 display"""
+    # Try common displays
+    import os as _os
+    for disp in [":0.0", ":0", ":1.0", ":1"]:
+        display_dir = f"/tmp/.X11-unix/X{disp.split(':')[1].split('.')[0]}"
+        if _os.path.exists(display_dir):
+            return disp
+    # Check if DISPLAY env var is set
+    env_disp = _os.environ.get("DISPLAY", "")
+    if env_disp:
+        return env_disp
+    return ":0.0"  # default fallback
+
 # ==================== ᴄᴏᴍᴍᴀɴᴅꜱ ====================
 
 # ===== ᴜꜱᴇʀ ᴍᴀɴᴀɢᴇᴍᴇɴᴛ ᴄᴏᴍᴍᴀɴᴅꜱ =====
@@ -1535,7 +1573,7 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
             "🔗 [ᴘʀᴏꜰɪʟᴇ ʟɪɴᴋ](t.me/Why_not_ZarKo)\n\n"
             "💡 **ꜰᴏʀ ꜱᴜᴘᴘᴏʀᴛ ᴏʀ Qᴜᴇʀɪᴇꜱ:**\n"
             "• ᴅᴍ ᴏɴ ᴛᴇʟᴇɢʀᴀᴍ\n"
-            "• ᴜꜱᴇ /��ᴇʟᴘ ꜰᴏʀ ᴄᴏᴍᴍᴀɴᴅꜱ",
+            "• ᴜꜱᴇ /��ᴇʟᴘ ꜰᴏʀ ᴄ��ᴍᴍᴀɴᴅꜱ",
             reply_markup=keyboard,
             disable_web_page_preview=True
         )
@@ -1700,6 +1738,7 @@ async def cmd_ping(client, message):
 @bot_app.on_message(pyro_filters.command("stats") & pyro_filters.user(OWNER_ID))
 async def cmd_stats(client, message):
     """ꜱʜᴏᴡ ʙᴏᴛ ꜱᴛᴀᴛɪꜱᴛɪᴄꜱ"""
+    ss_list = ", ".join(str(c) for c in screen_shares.keys()) if screen_shares else "ɴᴏɴᴇ"
     stats_msg = f"""
 📊 **ʙᴏᴛ ꜱᴛᴀᴛɪꜱᴛɪᴄꜱ**
 
@@ -1710,6 +1749,7 @@ async def cmd_stats(client, message):
 📡 **ꜱᴏᴜʀᴄᴇ:** `{RECORD_SOURCE}`
 🔊 **ᴀᴜᴅɪᴏ:** {'🔇 ᴍᴜᴛᴇᴅ' if is_muted else '🔊 ʟɪᴠᴇ'}
 🎵 **ʀᴇᴄᴏʀᴅɪɴɢ:** {'🟢 ᴏɴ' if is_recording else '🔴 ᴏꜰꜰ'}
+🖥️ **ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇꜱ:** {len(screen_shares)} ({ss_list})
 ────────────────────
 
 🎛️ **ᴀᴄᴛɪᴠᴇ ᴇꜰꜰᴇᴄᴛꜱ**
@@ -2201,7 +2241,7 @@ async def cmd_joinlink(client, message):
 
 ────────────────────
 📊 **ᴄᴜʀʀᴇɴᴛ ꜱᴛᴀᴛᴜꜱ:**
-• **ʀᴇᴄᴏʀᴅɪɴɢ:** {'🟢 ᴀᴄᴛɪᴠᴇ' if is_recording else '🔴 ɪɴᴀᴄᴛɪᴠᴇ'}
+• **ʀᴇᴄᴏʀ��ɪɴɢ:** {'🟢 ᴀᴄᴛɪᴠᴇ' if is_recording else '🔴 ɪɴᴀᴄᴛɪᴠᴇ'}
 • **ꜰᴏʀᴡᴀʀᴅɪɴɢ:** {len(forward_chats)} ᴄʜᴀᴛꜱ
 • **ꜱᴏᴜʀᴄᴇ:** `{RECORD_SOURCE}`
 """
@@ -2233,7 +2273,7 @@ async def cmd_joinlink(client, message):
         elif "invalid" in error_str and "hash" in error_str:
             error_msg = f"❌ **ɪɴᴠᴀʟɪᴅ ɪɴᴠɪᴛᴇ ʟɪɴᴋ!**\n\n📌 **ʟɪɴᴋ:** `{invite_link}`\n\nᴘʟᴇᴀꜱᴇ ᴄʜᴇᴄᴋ ᴛʜᴇ ʟɪɴᴋ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ."
         elif "flood" in error_str:
-            error_msg = "⚠️ **ꜰʟᴏᴏᴅ ᴄᴏɴᴛʀᴏʟ!**\n\nᴘʟᴇᴀꜱᴇ ᴡᴀɪᴛ ᴀ ꜰᴇᴡ ᴍɪɴᴜᴛᴇꜱ ʙᴇꜰᴏʀᴇ ᴛʀʏɪɴɢ ᴀɢᴀɪɴ."
+            error_msg = "⚠️ **ꜰʟᴏᴏᴅ ᴄᴏɴᴛʀᴏʟ!**\n\nᴘʟ��ᴀꜱᴇ ᴡᴀɪᴛ ᴀ ꜰᴇᴡ ᴍɪɴᴜᴛᴇꜱ ʙᴇꜰᴏʀᴇ ᴛʀʏɪɴɢ ᴀɢᴀɪɴ."
         elif "not found" in error_str or ("chat" in error_str and "not" in error_str):
             error_msg = f"❌ **ᴄʜᴀᴛ ɴᴏᴛ ꜰᴏᴜɴᴅ!**\n\n📌 **ʟɪɴᴋ:** `{invite_link}`\n\nᴛʜᴇ ɢʀᴏᴜᴘ ᴍᴀʏ ʜᴀᴠᴇ ʙᴇᴇɴ ᴅᴇʟᴇᴛᴇᴅ ᴏʀ ɪꜱ ᴘʀɪᴠᴀᴛᴇ."
         elif "user" in error_str and "deactivated" in error_str:
@@ -2414,7 +2454,7 @@ async def cmd_level(client, message):
             await message.reply(
                 f"❌ **ɪɴᴠᴀʟɪᴅ ʀᴀɴɢᴇ!**\n\n"
                 f"📌 **ᴀʟʟᴏᴡᴇᴅ:** `0-200`\n"
-                f"📊 **ʏᴏᴜ ᴇɴᴛᴇʀᴇᴅ:** `{level}`"
+                f"📊 **ʏᴏᴜ ᴇ��ᴛᴇʀᴇᴅ:** `{level}`"
             )
     except ValueError:
         await message.reply(
@@ -2541,7 +2581,7 @@ async def cmd_gain(client, message):
             await message.reply(
                 f"❌ **ɪɴᴠᴀʟɪᴅ ʀᴀɴɢᴇ!**\n\n"
                 f"📌 **ᴀʟʟᴏᴡᴇᴅ:** `0-60`\n"
-                f"📊 **ʏᴏᴜ ᴇɴᴛᴇʀᴇᴅ:** `{level}`"
+                f"📊 **ʏ��ᴜ ᴇɴᴛᴇʀᴇᴅ:** `{level}`"
             )
     except ValueError:
         await message.reply(
@@ -2993,7 +3033,7 @@ async def cmd_setrecordgroup(client, message):
         else:
             await status_msg.edit_text(
                 f"✅ **ꜱᴏᴜʀᴄᴇ ᴄʜᴀɴɢᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**\n\n"
-                f"📡 **ᴏʟᴅ:** `{old_source}`\n"
+                f"���� **ᴏʟᴅ:** `{old_source}`\n"
                 f"🎯 **ɴᴇᴡ:** `{new_source}`\n"
                 f"📊 **ꜱᴛᴀᴛᴜꜱ:** 🔴 ꜱᴛᴀɴᴅʙʏ\n\n"
                 f"💡 ᴜꜱᴇ `/ʀᴇᴄᴏʀᴅ` ᴛᴏ ꜱᴛᴀʀᴛ"
@@ -3023,7 +3063,31 @@ async def cmd_restart(client, message):
         save_state()
         logger.info("💾 ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
         
-        # ===== 2. LEAVE ALL CALLS =====
+        # ===== 2. STOP ALL SCREENSHARES FIRST =====
+        for ss_chat in list(screen_shares.keys()):
+            try:
+                info = screen_shares[ss_chat]
+                info["_closing"] = True
+                proc = info.get("process")
+                task = info.get("task")
+                if task and not task.done():
+                    task.cancel()
+                if proc and proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                try:
+                    await call_py.leave_call(ss_chat)
+                except Exception:
+                    pass
+                logger.info(f"ꜱᴛᴏᴘᴘᴇᴅ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴅᴜʀɪɴɢ ʀᴇꜱᴛᴀʀᴛ: {ss_chat}")
+            except Exception as e:
+                logger.debug(f"ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ʀᴇꜱᴛᴀʀᴛ ᴄʟᴇᴀɴᴜᴘ ᴇʀʀᴏʀ {ss_chat}: {e}")
+        screen_shares.clear()
+
+        # ===== 3. LEAVE ALL CALLS =====
         left_count = 0
         failed_count = 0
         
@@ -3145,70 +3209,111 @@ async def cmd_restart(client, message):
 
 async def _screenshare_frame_sender(chat_id, process):
     """Read raw video frames from ffmpeg stdout and send to voice chat"""
-    frame_size = SCREENSHARE_CONFIG["width"] * SCREENSHARE_CONFIG["height"] * 3 // 2  # YUV420p
-    logger.info(f"🖥️ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴛᴀʀᴛᴇᴅ ꜰᴏʀ {chat_id} | {SCREENSHARE_CONFIG['width']}x{SCREENSHARE_CONFIG['height']} @ {SCREENSHARE_CONFIG['fps']}fps")
+    w = SCREENSHARE_CONFIG["width"]
+    h = SCREENSHARE_CONFIG["height"]
+    fps = SCREENSHARE_CONFIG["fps"]
+    frame_size = w * h * 3 // 2  # YUV420p: width*height*1.5
+    frame_interval = 1.0 / max(fps, 1)
+    
+    logger.info(f"🖥️ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴛᴀʀᴛᴇᴅ ꜰᴏʀ {chat_id} | {w}x{h} @ {fps}fps")
+    
+    # Mark as closing=False so stop_screenshare knows we're still alive
+    if chat_id in screen_shares:
+        screen_shares[chat_id]["_closing"] = False
+    
+    consecutive_errors = 0
+    MAX_ERRORS = 5
+    
     try:
         while chat_id in screen_shares and process and process.poll() is None:
+            # Check if externally stopped
+            ss_info = screen_shares.get(chat_id, {})
+            if ss_info.get("_closing", False):
+                logger.info(f"🖥️ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴇxᴛᴇʀɴᴀʟʟʏ ꜱᴛᴏᴘᴘᴇᴅ ꜰᴏʀ {chat_id}")
+                break
+            
             try:
-                raw_frame = await asyncio.get_event_loop().run_in_executor(
+                loop = asyncio.get_event_loop()
+                raw_frame = await loop.run_in_executor(
                     None, process.stdout.read, frame_size
                 )
+                
                 if not raw_frame or len(raw_frame) < frame_size:
-                    if process.poll() is not None:
-                        logger.warning(f"ffmpeg process exited for {chat_id}")
+                    exit_code = process.poll()
+                    if exit_code is not None:
+                        logger.warning(f"ffmpeg exited with code {exit_code} for {chat_id}")
                         break
-                    await asyncio.sleep(0.1)
+                    consecutive_errors += 1
+                    if consecutive_errors >= MAX_ERRORS:
+                        logger.error(f"Too many partial frames for {chat_id}, stopping")
+                        break
+                    await asyncio.sleep(0.05)
                     continue
+                
+                consecutive_errors = 0  # Reset on success
+                
+                # Send frame to the voice chat
                 await call_py.send_frame(chat_id, Device.CAMERA, raw_frame)
-                await asyncio.sleep(1.0 / SCREENSHARE_CONFIG["fps"])
-            except Exception as e:
-                logger.debug(f"ꜰʀᴀᴍᴇ ꜱᴇɴᴅ ᴇʀʀᴏʀ ꜰᴏʀ {chat_id}: {e}")
+                
+                # Time-based pacing to match target FPS
+                await asyncio.sleep(frame_interval)
+                
+            except asyncio.CancelledError:
+                logger.info(f"🖥️ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴛᴀꜱᴋ ᴄᴀɴᴄᴇʟʟᴇᴅ ꜰᴏʀ {chat_id}")
                 break
+            except Exception as e:
+                consecutive_errors += 1
+                logger.debug(f"ꜰʀᴀᴍᴇ ꜱᴇɴᴅ ᴇʀʀᴏʀ #{consecutive_errors} ꜰᴏʀ {chat_id}: {e}")
+                if consecutive_errors >= MAX_ERRORS:
+                    break
+                await asyncio.sleep(0.5)
+                
+    except asyncio.CancelledError:
+        logger.info(f"🖥️ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴛᴀꜱᴋ ᴄᴀɴᴄᴇʟʟᴇᴅ ꜰᴏʀ {chat_id}")
     except Exception as e:
-        logger.error(f"ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴇɴᴅᴇʀ ᴇʀʀᴏʀ ꜰᴏʀ {chat_id}: {e}")
+        logger.error(f"ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴇɴᴅᴇʀ ꜰᴀᴛᴀʟ ᴇʀʀᴏʀ ꜰᴏʀ {chat_id}: {e}")
     finally:
-        # Cleanup on exit
-        if chat_id in screen_shares:
-            logger.info(f"🖥️ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴇɴᴅᴇᴅ ꜰᴏʀ {chat_id}")
-            del screen_shares[chat_id]
-        try:
-            if process and process.poll() is None:
-                process.terminate()
-                process.wait(timeout=3)
-        except Exception:
+        # Only cleanup if not already handled by stop_screenshare
+        ss_info = screen_shares.get(chat_id, {})
+        if not ss_info.get("_closing", False):
+            # Natural death - clean up ourselves
+            logger.info(f"🖥️ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴇɴᴅᴇᴅ (ɴᴀᴛᴜʀᴀʟ) ꜰᴏʀ {chat_id}")
             try:
-                if process:
-                    process.kill()
+                if process and process.poll() is None:
+                    process.terminate()
+                    try:
+                        process.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        process.kill()
             except Exception:
                 pass
-        try:
-            await call_py.leave_call(chat_id)
-        except Exception:
-            pass
-        save_state()
-
+            try:
+                await call_py.leave_call(chat_id)
+            except Exception:
+                pass
+            if chat_id in screen_shares:
+                del screen_shares[chat_id]
+            save_state()
 async def start_screenshare(chat_id, chat_title="ᴜɴᴋɴᴏᴡɴ"):
     """Start screen sharing to a voice chat using ffmpeg"""
     if chat_id in screen_shares:
         return False, "ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴀʟʀᴇᴀᴅʏ ᴀᴄᴛɪᴠᴇ ɪɴ ᴛʜɪꜱ ᴄʜᴀᴛ"
     
     try:
-        # Connect to the voice chat first
-        success, error = await join_call_safe(chat_id)
+        # Connect to the voice chat with VIDEO mode directly (no AUDIO first)
+        success, error = await join_video_call_safe(chat_id)
         if not success:
             return False, f"ᴊᴏɪɴ ꜰᴀɪʟᴇᴅ: {error}"
-        
-        # Start video stream via PyTgCalls
-        await call_py.play(
-            chat_id,
-            MediaStream(ExternalMedia.VIDEO, VIDEO_PARAMETERS),
-        )
         
         # Build ffmpeg command to capture screen and output raw YUV420p
         w = SCREENSHARE_CONFIG["width"]
         h = SCREENSHARE_CONFIG["height"]
         fps = SCREENSHARE_CONFIG["fps"]
-        display = SCREENSHARE_CONFIG.get("display", ":0.0")
+        # Auto-detect X11 display if not explicitly set
+        if "display" not in SCREENSHARE_CONFIG or SCREENSHARE_CONFIG.get("display") == ":0.0":
+            detected = _detect_x11_display()
+            SCREENSHARE_CONFIG["display"] = detected
+        display = SCREENSHARE_CONFIG["display"]
         
         ffmpeg_cmd = [
             "ffmpeg",
@@ -3250,16 +3355,24 @@ async def start_screenshare(chat_id, chat_title="ᴜɴᴋɴᴏᴡɴ"):
 async def stop_screenshare(chat_id):
     """Stop screen sharing in a specific chat"""
     if chat_id not in screen_shares:
-        return False, "ɴᴏ ᴀᴄᴛɪᴠᴇ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ɪɴ ᴛʜɪꜱ ᴄʜᴀᴛ"
+        return False, "ɴᴏ ᴀᴄᴛɪᴠᴇ ꜱᴄʀᴇᴇɴꜱʜ���ʀᴇ ɪɴ ᴛʜɪꜱ ᴄʜᴀᴛ"
     
     try:
         info = screen_shares[chat_id]
-        process = info["process"]
-        task = info["task"]
         
-        # Cancel the async task
+        # Set closing flag FIRST to prevent double-cleanup in frame sender
+        info["_closing"] = True
+        
+        process = info.get("process")
+        task = info.get("task")
+        
+        # Cancel the async task (will respect _closing flag in finally)
         if task and not task.done():
             task.cancel()
+            try:
+                await asyncio.wait_for(task, timeout=2.0)
+            except (asyncio.CancelledError, asyncio.TimeoutError):
+                pass
         
         # Terminate ffmpeg process
         if process and process.poll() is None:
@@ -3268,6 +3381,7 @@ async def stop_screenshare(chat_id):
                 process.wait(timeout=3)
             except subprocess.TimeoutExpired:
                 process.kill()
+                process.wait(timeout=1)
         
         # Leave the call
         try:
@@ -3275,13 +3389,21 @@ async def stop_screenshare(chat_id):
         except Exception:
             pass
         
-        del screen_shares[chat_id]
+        # Clean removal
+        if chat_id in screen_shares:
+            del screen_shares[chat_id]
         save_state()
         logger.info(f"🖥️ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴛᴏᴘᴘᴇᴅ ꜰᴏʀ {chat_id}")
         return True, None
         
     except Exception as e:
         logger.error(f"ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
+        # Force remove even on error
+        if chat_id in screen_shares:
+            try:
+                del screen_shares[chat_id]
+            except Exception:
+                pass
         return False, str(e)
 # ==================== ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴄᴏᴍᴍᴀɴᴅ ====================
 
@@ -3861,10 +3983,24 @@ if __name__ == "__main__":
         for ss_chat in list(screen_shares.keys()):
             try:
                 info = screen_shares[ss_chat]
+                info["_closing"] = True
                 proc = info.get("process")
+                task = info.get("task")
+                # Cancel task first
+                if task and not task.done():
+                    task.cancel()
+                # Kill ffmpeg
                 if proc and proc.poll() is None:
                     proc.terminate()
-                    proc.wait(timeout=2)
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                # Leave call
+                try:
+                    call_py.leave_call(ss_chat)
+                except Exception:
+                    pass
                 print(f"    ꜱᴛᴏᴘᴘᴇᴅ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ: {ss_chat}")
             except Exception as e:
                 print(f"    ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴄʟᴇᴀɴᴜᴘ ᴇʀʀᴏʀ {ss_chat}: {e}")
@@ -3904,6 +4040,6 @@ if __name__ == "__main__":
             save_state()
             print("    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
         except Exception as e:
-            print(f"    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇ ᴇʀʀᴏʀ: {e}")
+            print(f"    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇ ᴇʀʀᴏ��: {e}")
         
         print("✅ ᴄʟᴇᴀɴᴜᴘ ᴄᴏᴍᴘʟᴇᴛᴇ")
