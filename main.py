@@ -101,18 +101,6 @@ audio_config = {
     'lowpass': False     # High clarity maintain
 }
 
-ADVANCED_AUDIO_CONFIG = {
-    'ns': 8,            # Background noise halka remove
-    'hpf': 15,          # Low rumble aur mota bass remove
-    'deesser': 5,       # S, Sh sound control
-    'presence_eq': 12,  # Voice ko aage laata hai
-    'loudness': 24,     # Consistent loudness
-    'limiter': 25,      # Clipping se bachata hai
-    'noisegate': 6,     # Idle noise band
-    'dc_offset': 1,     # Hamesha ON
-    'saturation': 6,    # Voice me punch
-    'stereo_width': 0,  # Voice chat ke liye OFF
-}
 # ==================== ᴘᴇʀꜱɪꜱᴛᴇɴᴄᴇ ====================
 
 STATE_FILE = "bot_state.json"
@@ -125,10 +113,10 @@ def save_state():
             json.dump({
                 "approved_users": sorted(approved_users),
                 "audio_config": audio_config,
-                "advanced_audio_config": ADVANCED_AUDIO_CONFIG,
                 "record_source": RECORD_SOURCE,
                 "forward_chats": sorted(forward_chats),
-                "auto_mute_enabled": auto_mute_enabled,  # ← ADDED
+                "auto_mute_enabled": auto_mute_enabled,
+                "is_muted": is_muted,
             }, f, indent=2)
         os.replace(tmp, STATE_FILE)
     except Exception as e:
@@ -136,18 +124,17 @@ def save_state():
 
 def load_state():
     """ʟᴏᴀᴅ ᴘᴇʀꜱɪꜱᴛᴇᴅ ꜱᴛᴀᴛᴇ ɪꜰ ᴀᴠᴀɪʟᴀʙʟᴇ"""
-    global RECORD_SOURCE, auto_mute_enabled  # ← ADDED auto_mute_enabled
+    global RECORD_SOURCE, auto_mute_enabled, is_muted
+    
     try:
         with open(STATE_FILE, "r") as f:
             data = json.load(f)
+        
         approved_users.update(int(uid) for uid in data.get("approved_users", []))
+        
         saved_config = data.get("audio_config")
         if isinstance(saved_config, dict):
             audio_config.update(saved_config)
-        
-        saved_advanced = data.get("advanced_audio_config")
-        if isinstance(saved_advanced, dict):
-            ADVANCED_AUDIO_CONFIG.update(saved_advanced)
         
         saved_source = data.get("record_source")
         if saved_source is not None:
@@ -157,9 +144,10 @@ def load_state():
         if isinstance(saved_forwards, list):
             forward_chats.update(int(cid) for cid in saved_forwards)
         
-        auto_mute_enabled = data.get("auto_mute_enabled", False)  # ← ADDED
+        auto_mute_enabled = data.get("auto_mute_enabled", False)
+        is_muted = data.get("is_muted", False)
         
-        logger.info(f"ʟᴏᴀᴅᴇᴅ ꜱᴛᴀᴛᴇ: {len(approved_users)} ᴀᴘᴘʀᴏᴠᴇᴅ ᴜꜱᴇʀ(ꜱ), ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}")
+        logger.info(f"ʟᴏᴀᴅᴇᴅ ꜱᴛᴀᴛᴇ: {len(approved_users)} ᴀᴘᴘʀᴏᴠᴇᴅ ᴜꜱᴇʀ(ꜱ), ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}, ᴍᴜᴛᴇᴅ: {is_muted}")
     except FileNotFoundError:
         logger.info("ɴᴏ ꜱᴀᴠᴇᴅ ꜱᴛᴀᴛᴇ ꜰᴏᴜɴᴅ - ꜱᴛᴀʀᴛɪɴɢ ꜰʀᴇꜱʜ")
     except Exception as e:
@@ -239,9 +227,9 @@ def apply_volume_boost(audio_data, level):
     
     # ꜱᴍᴀʀᴛ ɢᴀɪɴ ᴍᴀᴘᴘɪɴɢ ꜰᴏʀ ᴍᴀx ʟᴏᴜᴅɴᴇꜱꜱ
     if level <= 100:
-        gain_factor = 1.5 + ((level - 100) * 0.0015)
+        gain_factor = 0.5 + (level / 200.0)
     else:
-        gain_factor = 1.4 + ((level - 100) * 0.22)
+        gain_factor = 1.5 + ((level - 100) * 0.15)
     
     processed = audio * gain_factor
     
@@ -268,8 +256,8 @@ def apply_bass_boost_basic(audio_data, bass_level):
     low = np.convolve(audio, kernel, mode="same")
     
     # ᴄʟᴇᴀɴ ᴍɪx (ᴄᴏɴᴛʀᴏʟʟᴇᴅ ʙᴀꜱꜱ)
-    mix = min(0.35, bass_level / 180.0)
-    processed = audio + (low * mix * 1.1)
+    mix = min(0.50, bass_level / 120.0)
+    processed = audio + (low * mix * 1.3)
     
     # ʀᴇᴍᴏᴠᴇ ꜱᴜʙ-ʙᴀꜱꜱ ʀᴜᴍʙʟᴇ (ꜰᴀᴛ ᴋɪʟʟᴇʀ)
     if bass_level > 10:
@@ -289,8 +277,8 @@ def apply_bass_boost_advanced(audio_data, bass_level, sample_rate=48000):
     try:
         # ʜɪɢʜᴇʀ ꜰʀᴇQ = ᴛɪɢʜᴛᴇʀ ʙᴀꜱꜱ
         f0 = 80 + (bass_level * 0.2)
-        Q = 1
-        gain_db = bass_level / 5
+        Q = 0.7
+        gain_db = bass_level / 4
         
         w0 = 2 * np.pi * f0 / sample_rate
         A = 10 ** (gain_db / 40)
@@ -312,7 +300,7 @@ def apply_bass_boost_advanced(audio_data, bass_level, sample_rate=48000):
         
         # ʀᴇᴍᴏᴠᴇ ꜱᴜʙ-ʙᴀꜱꜱ (ɴᴏ ꜰᴀᴛ)
         if bass_level > 10:
-            b_hp, a_hp = signal.butter(2, 50 / (sample_rate / 2), btype='high')
+            b_hp, a_hp = signal.butter(2, 40 / (sample_rate / 2), btype='high')
             filtered = signal.lfilter(b_hp, a_hp, filtered)
         
         # ᴄʟᴇᴀɴ ᴄʟɪᴘᴘɪɴɢ
@@ -339,7 +327,7 @@ def apply_treble_boost_basic(audio_data, treble_level):
     high = audio - low
 
     # Smooth boost
-    mix = min(0.45, treble_level / 140.0)
+    mix = min(0.60, treble_level / 100.0)
 
     processed = audio + (high * mix)
 
@@ -354,8 +342,8 @@ def apply_treble_boost_advanced(audio_data, treble_level, sample_rate=48000):
         return audio_data
     try:
         f0 = 3500
-        Q = 0.9
-        gain_db = treble_level / 6
+        Q = 0.4
+        gain_db = treble_level / 5
         w0 = 2 * np.pi * f0 / sample_rate
         A = 10 ** (gain_db / 40)
         cos_w0 = np.cos(w0)
@@ -383,14 +371,14 @@ def apply_soft_gain(audio_data, gain_level):
     audio = audio_data.astype(np.float32)
     
     # === ꜱᴛᴀɢᴇ 1: ɪɴᴛᴇʟʟɪɢᴇɴᴛ ᴍᴀᴋᴇᴜᴘ ɢᴀɪɴ ===
-    gain_factor = 2.0 + (gain_level / 32.0)
+    gain_factor = 2.0 + (gain_level / 35.0)
     processed = audio * gain_factor
     
     # === ꜱᴛᴀɢᴇ 2: ᴘʀᴏ ꜱᴏꜰᴛ-ᴋɴᴇᴇ ᴄᴏᴍᴘʀᴇꜱꜱᴏʀ ===
     if audio_config.get("compressor", True):
-        threshold = 16000.0 + (gain_level * 35)
-        ratio = 4.0 + (gain_level / 35.0)
-        knee = 2500.0
+        threshold = 16000.0 + (gain_level * 40)
+        ratio = 3.0 + (gain_level / 30.0)
+        knee = 3000.0
         
         abs_processed = np.abs(processed)
         above = abs_processed > (threshold - knee/2)
@@ -409,7 +397,7 @@ def apply_soft_gain(audio_data, gain_level):
                 y = threshold + (x - threshold) / ratio
                 processed[above_knee] = np.sign(processed[above_knee]) * y
         
-        makeup = 1.3 + (gain_level / 60.0)
+        makeup = 1.4 + (gain_level / 50.0)
         processed = processed * makeup
     
     # === ꜱᴛᴀɢᴇ 3: ᴛʀᴜᴇ ᴘᴇᴀᴋ ʟɪᴍɪᴛᴇʀ ===
@@ -427,7 +415,7 @@ def apply_soft_gain(audio_data, gain_level):
     return processed.astype(np.int16)
 
 def process_audio(audio_data):
-    """ᴀᴘᴘʟʏ ᴀʟʟ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ɪɴ ᴄʜᴀɪɴ ɪɴᴄʟᴜᴅɪɴɢ ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛꜱ"""
+    """ᴀᴘᴘʟʏ ᴀʟʟ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ɪɴ ᴄʜᴀɪɴ (HPF → Bass → Gain → Volume → Treble → LPF)"""
 
     if audio_data is None or len(audio_data) == 0:
         return audio_data
@@ -436,53 +424,41 @@ def process_audio(audio_data):
         processed = audio_data.copy()
         config = audio_config
 
-        # ===== BASIC EFFECTS =====
-        
-        # 1. Volume Boost
-        if config.get('volume', 100) != 100:
-            processed = apply_volume_boost(processed, config.get('volume', 100))
+        # ===== 1. HIGH-PASS FILTER (Remove low rumble first) =====
+        if config.get('highpass', False) and SCIPY_AVAILABLE:
+            try:
+                b, a = signal.butter(2, 80 / 24000, btype='high')
+                processed = signal.lfilter(b, a, processed.astype(np.float32))
+                processed = np.clip(processed, -32768, 32767).astype(np.int16)
+            except Exception:
+                pass
 
-        # 2. Bass Boost
+        # ===== 2. BASS BOOST (Add bass after HPF) =====
         if config.get('bass', 0) > 0:
             if SCIPY_AVAILABLE:
                 processed = apply_bass_boost_advanced(processed, config.get('bass', 0))
             else:
                 processed = apply_bass_boost_basic(processed, config.get('bass', 0))
 
-        # 3. Treble Boost
+        # ===== 3. GAIN (Amplify signal before volume) =====
+        if config.get('gain', 0) > 0:
+            processed = apply_soft_gain(processed, config.get('gain', 0))
+
+        # ===== 4. VOLUME (Final volume control) =====
+        if config.get('volume', 100) != 100:
+            processed = apply_volume_boost(processed, config.get('volume', 100))
+
+        # ===== 5. TREBLE BOOST (Add clarity after volume) =====
         if config.get('treble', 0) > 0:
             if SCIPY_AVAILABLE:
                 processed = apply_treble_boost_advanced(processed, config.get('treble', 0))
             else:
                 processed = apply_treble_boost_basic(processed, config.get('treble', 0))
 
-        # 4. Soft Gain
-        if config.get('gain', 0) > 0:
-            processed = apply_soft_gain(processed, config.get('gain', 0))
-
-        # ===== ADVANCED EFFECTS =====
-        # Check if any advanced effect is active
-        advanced_active = any(
-            ADVANCED_AUDIO_CONFIG[key] != 0 
-            for key in ADVANCED_AUDIO_CONFIG
-        )
-        
-        if advanced_active:
-            processed = apply_advanced_effects(processed)
-
-        # ===== LOWPASS FILTER =====
+        # ===== 6. LOW-PASS FILTER (Remove high-frequency noise last) =====
         if config.get('lowpass', False) and SCIPY_AVAILABLE:
             try:
                 b, a = signal.butter(4, 16000 / 24000, btype='low')
-                processed = signal.lfilter(b, a, processed.astype(np.float32))
-                processed = np.clip(processed, -32768, 32767).astype(np.int16)
-            except Exception:
-                pass
-
-        # ===== HIGHPASS FILTER =====
-        if config.get('highpass', False) and SCIPY_AVAILABLE:
-            try:
-                b, a = signal.butter(2, 80 / 24000, btype='high')
                 processed = signal.lfilter(b, a, processed.astype(np.float32))
                 processed = np.clip(processed, -32768, 32767).astype(np.int16)
             except Exception:
@@ -493,373 +469,20 @@ def process_audio(audio_data):
     except Exception as e:
         logger.error(f"ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ ᴇʀʀᴏʀ: {e}")
         return audio_data
-
-# ==================== ᴀᴅᴠᴀɴᴄᴇᴅ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ====================
-
-def apply_noise_suppression(audio_data, level):
-    """ɴᴏɪꜱᴇ ꜱᴜᴘᴘʀᴇꜱꜱɪᴏɴ - ʀᴇᴅᴜᴄᴇꜱ ʙᴀᴄᴋɢʀᴏᴜɴᴅ ʜɪꜱꜱ/ʜᴜᴍ"""
-    if level == 0:
-        return audio_data
-    
-    audio = audio_data.astype(np.float32)
-    strength = abs(level) / 50.0
-    
-    threshold = 200 + (strength * 800)
-    softness = 0.1 + (strength * 0.4)
-    abs_audio = np.abs(audio)
-    noise_floor = np.percentile(abs_audio, 10)
-    
-    gate_factor = 1.0 / (1.0 + np.exp(-softness * (abs_audio - threshold) / (noise_floor + 1)))
-    processed = audio * gate_factor
-    
-    return np.clip(processed, -32768, 32767).astype(np.int16)
-
-def apply_high_pass_filter(audio_data, level, sample_rate=48000):
-    """ʜɪɢʜ ᴘᴀꜱꜱ ꜰɪʟᴛᴇʀ - ʀᴇᴍᴏᴠᴇꜱ ʟᴏᴡ ꜰʀᴇQᴜᴇɴᴄʏ ʀᴜᴍʙʟᴇ"""
-    if level == 0:
-        return audio_data
-    
-    freq = 40 + (abs(level) * 3)
-    
-    if SCIPY_AVAILABLE:
-        try:
-            normalized_freq = freq / (sample_rate / 2)
-            if normalized_freq >= 1.0:
-                return audio_data
-            b, a = signal.butter(3, normalized_freq, btype='high')
-            processed = signal.lfilter(b, a, audio_data.astype(np.float32))
-            return np.clip(processed, -32768, 32767).astype(np.int16)
-        except Exception:
-            pass
-    
-    kernel_size = max(3, int(20 - (abs(level)/50.0) * 15))
-    kernel = np.array([-0.5] + [1.0] * (kernel_size - 2) + [-0.5]) / (kernel_size - 1)
-    processed = np.convolve(audio_data.astype(np.float32), kernel, mode='same')
-    return np.clip(processed, -32768, 32767).astype(np.int16)
-
-def apply_deesser(audio_data, level, sample_rate=48000):
-    """ᴅᴇ-ᴇꜱꜱᴇʀ - ʀᴇᴅᴜᴄᴇꜱ ꜱɪʙɪʟᴀɴᴛ ꜱᴏᴜɴᴅꜱ"""
-    if level == 0:
-        return audio_data
-    
-    audio = audio_data.astype(np.float32)
-    strength = abs(level) / 50.0
-    
-    if SCIPY_AVAILABLE:
-        try:
-            low = 4000 / (sample_rate / 2)
-            high = 8000 / (sample_rate / 2)
-            b, a = signal.butter(3, [low, high], btype='band')
-            sibilance = signal.lfilter(b, a, audio)
-            sibilance_energy = np.abs(sibilance)
-            threshold = np.percentile(sibilance_energy, 70) * (0.3 + strength * 0.4)
-            reduction = 1.0 - (strength * 0.7) * np.tanh(sibilance_energy / (threshold + 1))
-            reduction = np.clip(reduction, 0.3, 1.0)
-            processed = audio - (sibilance * (1.0 - reduction) * 0.5)
-            return np.clip(processed, -32768, 32767).astype(np.int16)
-        except Exception:
-            pass
-    
-    kernel = np.array([-0.1, 0.3, -0.5, 0.3, -0.1])
-    sibilance = np.convolve(audio, kernel, mode='same')
-    reduction = 1.0 - strength * 0.5
-    processed = audio - (sibilance * (1.0 - reduction))
-    return np.clip(processed, -32768, 32767).astype(np.int16)
-
-def apply_presence_eq(audio_data, level, sample_rate=48000):
-    """ᴘʀᴇꜱᴇɴᴄᴇ EQ - ʙᴏᴏꜱᴛ/ᴄᴜᴛ ᴛʜᴇ 2-5ᴋʜᴢ ʀᴀɴɢᴇ"""
-    if level == 0:
-        return audio_data
-    
-    audio = audio_data.astype(np.float32)
-    gain_db = (level / 50.0) * 12
-    f0 = 3200
-    Q = 0.7
-    
-    if SCIPY_AVAILABLE:
-        try:
-            w0 = 2 * np.pi * f0 / sample_rate
-            A = 10 ** (gain_db / 40)
-            cos_w0 = np.cos(w0)
-            sin_w0 = np.sin(w0)
-            alpha = sin_w0 / (2 * Q)
-            
-            b0 = 1 + alpha * A
-            b1 = -2 * cos_w0
-            b2 = 1 - alpha * A
-            a0 = 1 + alpha / A
-            a1 = -2 * cos_w0
-            a2 = 1 - alpha / A
-            
-            b = np.array([b0, b1, b2]) / a0
-            a = np.array([1, a1 / a0, a2 / a0])
-            
-            processed = signal.lfilter(b, a, audio)
-            return np.clip(processed, -32768, 32767).astype(np.int16)
-        except Exception:
-            pass
-    
-    if gain_db > 0:
-        kernel = np.array([-0.05, 0.1, 0.8, 0.1, -0.05])
-        presence = np.convolve(audio, kernel, mode='same')
-        processed = audio + (presence * (gain_db / 20))
-    else:
-        kernel = np.array([0.05, -0.1, 0.8, -0.1, 0.05])
-        presence = np.convolve(audio, kernel, mode='same')
-        processed = audio - (audio - presence) * (abs(gain_db) / 20)
-    return np.clip(processed, -32768, 32767).astype(np.int16)
-
-def apply_loudness_normalization(audio_data, level):
-    """ʟᴏᴜᴅɴᴇꜱꜱ ɴᴏʀᴍᴀʟɪᴢᴀᴛɪᴏɴ (RMS/LUFS)"""
-    if level == 0:
-        return audio_data
-    
-    audio = audio_data.astype(np.float32)
-    strength = abs(level) / 50.0
-    
-    rms = np.sqrt(np.mean(audio ** 2))
-    if rms < 1:
-        return audio_data
-    
-    target_rms = 2000 + (strength * 6000)
-    gain = np.clip(target_rms / rms, 0.1, 10.0)
-    processed = audio * gain
-    
-    if strength > 0.3:
-        threshold = target_rms * 0.8
-        ratio = 2.0 + (strength * 3.0)
-        abs_processed = np.abs(processed)
-        above = abs_processed > threshold
-        if np.any(above):
-            processed[above] = np.sign(processed[above]) * (
-                threshold + (abs_processed[above] - threshold) / ratio
-            )
-        makeup = 1.0 + (strength * 0.3)
-        processed = processed * makeup
-    
-    return np.clip(processed, -32768, 32767).astype(np.int16)
-
-def apply_look_ahead_limiter(audio_data, level):
-    """ʟᴏᴏᴋ-ᴀʜᴇᴀᴅ ʟɪᴍɪᴛᴇʀ - ᴘʀᴇᴠᴇɴᴛꜱ ᴄʟɪᴘᴘɪɴɢ"""
-    if level == 0:
-        return audio_data
-    
-    audio = audio_data.astype(np.float32)
-    look_ahead = int(4 + abs(level) * 0.2)
-    release = int(20 + abs(level) * 0.5)
-    
-    delayed = np.concatenate([audio[look_ahead:], np.zeros(look_ahead)])
-    abs_delayed = np.abs(delayed)
-    threshold = 15000 + (abs(level) * 150)
-    
-    gain_reduction = np.ones_like(delayed)
-    over_threshold = abs_delayed > threshold
-    if np.any(over_threshold):
-        reduction = threshold / (abs_delayed[over_threshold] + 1)
-        gain_reduction[over_threshold] = reduction
-    
-    # Vectorized release envelope. The original recurrence simplifies to
-    #   s[i] = min(gain_reduction[i], s[i-1] + step),  s[0] = 1.0
-    # which equals a sloped cumulative-minimum (no per-sample Python loop).
-    step = 1.0 / release
-    idx = np.arange(len(gain_reduction), dtype=np.float32)
-    c = gain_reduction.astype(np.float32).copy()
-    if len(c) > 0:
-        c[0] = 1.0
-    smoothed_reduction = np.minimum.accumulate(c - idx * step) + idx * step
-    
-    processed = audio * smoothed_reduction
-    processed = 32000.0 * np.tanh(processed / 32000.0)
-    return np.clip(processed, -32768, 32767).astype(np.int16)
-
-def apply_noise_gate(audio_data, level):
-    """ɴᴏɪꜱᴇ ɢᴀᴛᴇ / ᴇxᴘᴀɴᴅᴇʀ"""
-    if level == 0:
-        return audio_data
-    
-    audio = audio_data.astype(np.float32)
-    strength = abs(level) / 50.0
-    abs_audio = np.abs(audio)
-    noise_floor = np.percentile(abs_audio, 5)
-    threshold = noise_floor * (1.0 + strength * 2.0)
-    ratio = 1.0 + (strength * 4.0)
-    knee_width = 200 + (strength * 300)
-    
-    gate_factor = np.ones_like(audio)
-    below = abs_audio < (threshold - knee_width/2)
-    in_knee = (abs_audio >= (threshold - knee_width/2)) & (abs_audio <= (threshold + knee_width/2))
-    above = abs_audio > (threshold + knee_width/2)
-    
-    gate_factor[below] = 0.0
-    if np.any(in_knee):
-        x = (abs_audio[in_knee] - (threshold - knee_width/2)) / knee_width
-        gate_factor[in_knee] = x ** 2
-    if np.any(above):
-        x = (abs_audio[above] - threshold) / (abs_audio[above] + 1)
-        gate_factor[above] = 1.0 - (1.0 - 1.0/ratio) * x
-    
-    processed = audio * gate_factor
-    return np.clip(processed, -32768, 32767).astype(np.int16)
-
-def apply_dc_offset_removal(audio_data, level):
-    """ᴅᴄ ᴏꜰꜰꜱᴇᴛ ʀᴇᴍᴏᴠᴀʟ"""
-    if level == 0:
-        return audio_data
-    
-    audio = audio_data.astype(np.float32)
-    dc_offset = np.mean(audio)
-    
-    if abs(dc_offset) > 1:
-        strength = abs(level) / 50.0
-        alpha = 0.001 + (strength * 0.02)
-        # Vectorized leaky-integrator DC tracker (no slow per-sample loop):
-        #   y[i] = (1-alpha)*y[i-1] + alpha*x[i]  ->  IIR filter
-        if SCIPY_AVAILABLE:
-            dc_estimate = signal.lfilter([alpha], [1.0, -(1.0 - alpha)], audio)
-            processed = audio - dc_estimate
-        else:
-            processed = audio - dc_offset
-        return np.clip(processed, -32768, 32767).astype(np.int16)
-    
-    return audio_data.astype(np.int16)
-
-def apply_soft_saturation(audio_data, level):
-    """ꜱᴏꜰᴛ ꜱᴀᴛᴜʀᴀᴛɪᴏɴ / ᴇxᴄɪᴛᴇʀ"""
-    if level == 0:
-        return audio_data
-    
-    audio = audio_data.astype(np.float32)
-    strength = abs(level) / 50.0
-    
-    if level > 0:
-        positive = audio[audio > 0]
-        negative = audio[audio < 0]
-        positive_sat = 32000.0 * np.tanh((positive / 32000.0) * (1.0 + strength * 0.3))
-        negative_sat = 32000.0 * np.tanh((negative / 32000.0) * (1.0 + strength * 0.2))
-        processed = np.zeros_like(audio)
-        processed[audio > 0] = positive_sat
-        processed[audio < 0] = negative_sat
-        if strength > 0.3:
-            harmonic = 0.05 * strength * (audio ** 2) * np.sign(audio)
-            processed = processed + harmonic
-    else:
-        processed = 30000.0 * np.tanh(audio / 30000.0)
-        harmonic = 0.02 * abs(level) * (audio ** 2) * np.sign(audio)
-        processed = processed + harmonic
-    
-    return np.clip(processed, -32768, 32767).astype(np.int16)
-
-def apply_stereo_width(audio_data, level):
-    """
-    ᴜꜰᴇʀᴇᴏ ᴡɪᴅᴛʜ / ᴍᴏɴᴏ ᴏᴘᴛɪᴍɪᴢᴀᴛɪᴏɴ - ꜰʀᴀᴍᴇ-ꜱɪᴢᴇ ꜱᴀꜰᴇ
-    (ᴏᴜᴛᴘᴜᴛ ꜱᴀᴍᴘʟᴇ ᴄᴏᴜɴᴛ ᴀʟᴡᴀʏꜱ = ɪɴᴘᴜᴛ)
-    """
-    if level == 0 or audio_data is None or len(audio_data) == 0:
-        return audio_data
-
-    audio = audio_data.astype(np.float32)
-    strength = min(abs(level) / 50.0, 1.0)
-    n = len(audio)
-
-    # Frames from PyTgCalls are interleaved stereo (even length). We MUST keep
-    # the output the same number of samples as the input, otherwise the frame
-    # sent via send_frame() gets the wrong size and audio breaks.
-    if n % 2 == 0 and n >= 4:
-        left = audio[0::2]
-        right = audio[1::2]
-
-        mid = (left + right) / 2.0
-        side = (left - right) / 2.0
-
-        if level > 0:
-            side_gain = 1.0 + strength * 1.5      # widen
-        else:
-            side_gain = max(0.0, 1.0 - strength)  # narrow toward mono
-
-        left_new = mid + side * side_gain
-        right_new = mid - side * side_gain
-
-        # Subtle Haas-style widening, still without changing length
-        if level < 0 and strength > 0.3:
-            delay = min(int(2 + strength * 4), max(1, len(left) // 4))
-            left_new = left_new - np.roll(left_new, delay) * strength * 0.15
-            right_new = right_new + np.roll(right_new, delay) * strength * 0.15
-
-        processed = np.empty(n, dtype=np.float32)
-        processed[0::2] = left_new
-        processed[1::2] = right_new
-    else:
-        # Odd-length / true mono buffer: keep length identical (safe no-op)
-        processed = audio.copy()
-
-    peak = np.max(np.abs(processed))
-    if peak > 32000:
-        processed = (processed / peak) * 32000
-
-    return np.clip(processed, -32768, 32767).astype(np.int16)
-
-
-def apply_advanced_effects(audio_data):
-    """ᴀᴘᴘʟʏ ᴀʟʟ ᴀᴅᴠᴀɴᴄᴇᴅ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ɪɴ ᴄʜᴀɪɴ"""
-    if audio_data is None or len(audio_data) == 0:
-        return audio_data
-    
-    try:
-        config = ADVANCED_AUDIO_CONFIG
-        processed = audio_data.copy()
-        
-        # 1. DC Offset Removal (first in chain)
-        if config['dc_offset'] != 0:
-            processed = apply_dc_offset_removal(processed, config['dc_offset'])
-        
-        # 2. Noise Gate
-        if config['noisegate'] != 0:
-            processed = apply_noise_gate(processed, config['noisegate'])
-        
-        # 3. High Pass Filter
-        if config['hpf'] != 0:
-            processed = apply_high_pass_filter(processed, config['hpf'])
-        
-        # 4. Noise Suppression
-        if config['ns'] != 0:
-            processed = apply_noise_suppression(processed, config['ns'])
-        
-        # 5. De-Esser
-        if config['deesser'] != 0:
-            processed = apply_deesser(processed, config['deesser'])
-        
-        # 6. Presence EQ
-        if config['presence_eq'] != 0:
-            processed = apply_presence_eq(processed, config['presence_eq'])
-        
-        # 7. Soft Saturation
-        if config['saturation'] != 0:
-            processed = apply_soft_saturation(processed, config['saturation'])
-        
-        # 8. Loudness Normalization
-        if config['loudness'] != 0:
-            processed = apply_loudness_normalization(processed, config['loudness'])
-        
-        # 9. Look-Ahead Limiter
-        if config['limiter'] != 0:
-            processed = apply_look_ahead_limiter(processed, config['limiter'])
-        
-        # 10. Stereo Width (final)
-        if config['stereo_width'] != 0:
-            processed = apply_stereo_width(processed, config['stereo_width'])
-        
-        return processed
-        
-    except Exception as e:
-        logger.error(f"ᴀᴅᴠᴀɴᴄᴇᴅ ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ ᴇʀʀᴏʀ: {e}")
-        return audio_data
-        
-        
+               
 # ==================== ᴀᴜᴅɪᴏ ʜᴀɴᴅʟᴇʀ ====================
 
 async def _forward_incoming_frames(update):
-    if is_muted or update.chat_id != RECORD_SOURCE or not forward_chats:
+    """ᴘʀᴏᴄᴇꜱꜱ ᴀɴᴅ ꜰᴏʀᴡᴀʀᴅ ᴀᴜᴅɪᴏ ꜰʀᴀᴍᴇꜱ"""
+    global is_muted  # ← YEH LINE ADD KARO
+    
+    # 🔥 MUTE CHECK - SAB SE PEHLE
+    if is_muted:
         return
+    
+    if update.chat_id != RECORD_SOURCE or not forward_chats:
+        return
+    
     async with processing_lock:
         try:
             if not update.frames:
@@ -1405,9 +1028,6 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
 /effects - ꜱʜᴏᴡ ᴄᴜʀʀᴇɴᴛ
 /reset - ʀᴇꜱᴇᴛ ᴀʟʟ
 ────────────────────
-⚡ **ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛꜱ**
-/a1 - ᴀᴅᴠᴀɴᴄᴇᴅ ᴄᴏɴᴛʀᴏʟ
-────────────────────
 📊 **ᴜᴛɪʟɪᴛʏ**
 /ping - ᴄʜᴇᴄᴋ ʙᴏᴛ
 /stats - ʙᴏᴛ ꜱᴛᴀᴛꜱ
@@ -1602,9 +1222,6 @@ async def cmd_help(client, message):
 /gain <0-60> - ɢᴀɪɴ
 /effects - ꜱʜᴏᴡ ᴄᴜʀʀᴇɴᴛ
 /reset - ʀᴇꜱᴇᴛ ᴀʟʟ
-────────────────────
-⚡ **ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛꜱ**
-/a1 - ᴀᴅᴠᴀɴᴄᴇᴅ ᴄᴏɴᴛʀᴏʟ ᴘᴀɴᴇʟ
 ────────────────────
 📊 **ᴜᴛɪʟɪᴛʏ**
 /ping - ᴄʜᴇᴄᴋ ʙᴏᴛ
@@ -1813,7 +1430,7 @@ async def cmd_join(client, message):
 @bot_app.on_message(pyro_filters.command("rejoin") & authorized_only())
 async def cmd_rejoin(client, message):
     """ʟᴇᴀᴠᴇ ᴀɴᴅ ᴊᴏɪɴ ᴀʟʟ ᴄʜᴀᴛꜱ ᴀɢᴀɪɴ (ʀᴇᴄᴏᴠᴇʀ ꜰʀᴏᴍ ɴᴇᴛᴡᴏʀᴋ ɪꜱꜱᴜᴇꜱ)"""
-    global is_recording
+    global is_recording, is_muted  # ← FIX 1: is_muted ADDED
     
     status_msg = await message.reply(
         "🔄 **ʀᴇᴊᴏɪɴɪɴɢ ᴀʟʟ ᴄʜᴀᴛꜱ...**\n\n"
@@ -1835,7 +1452,7 @@ async def cmd_rejoin(client, message):
             # Leave source
             await call_py.leave_call(source_chat)
             logger.info(f"ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ {source_chat} ꜰᴏʀ ʀᴇᴊᴏɪɴ")
-            await asyncio.sleep(1)  # Small delay for cleanup
+            await asyncio.sleep(1)
         except Exception as e:
             logger.warning(f"ᴄᴏᴜʟᴅ ɴᴏᴛ ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ: {e}")
         
@@ -1874,7 +1491,7 @@ async def cmd_rejoin(client, message):
             except Exception as e:
                 logger.debug(f"ᴄᴏᴜʟᴅ ɴᴏᴛ ʟᴇᴀᴠᴇ {chat_id}: {e}")
         
-        await asyncio.sleep(1.5)  # Give time for cleanup
+        await asyncio.sleep(1.5)
         
         # Rejoin all forward chats
         for chat_id in forward_list:
@@ -1887,7 +1504,6 @@ async def cmd_rejoin(client, message):
                     rejoin_results["forwards"]["failed"] += 1
                     rejoin_results["forwards"]["errors"].append(f"`{chat_id}`: {error[:50]}")
                     logger.error(f"ꜰᴀɪʟᴇᴅ ᴛᴏ ʀᴇᴊᴏɪɴ {chat_id}: {error}")
-                    # Remove failed chats from forward list
                     forward_chats.discard(chat_id)
             except Exception as e:
                 rejoin_results["forwards"]["failed"] += 1
@@ -1899,6 +1515,21 @@ async def cmd_rejoin(client, message):
         rejoin_results["forwards"]["error"] = "ɴᴏ ꜰᴏʀᴡᴀʀᴅ ᴄʜᴀᴛꜱ"
     
     save_state()
+
+    # ===== FIX 2: RESTORE MUTE STATUS AFTER REJOIN =====
+    # Agar auto_mute_enabled ON hai toh saare chats ko mute karo
+    if auto_mute_enabled and forward_chats:
+        paused = 0
+        for chat_id in list(forward_chats):
+            try:
+                await call_py.pause_stream(chat_id)
+                paused += 1
+            except Exception:
+                pass
+        if paused:
+            is_muted = True
+            save_state()
+            logger.info(f"ʀᴇᴊᴏɪɴ ᴀᴜᴛᴏ-ᴍᴜᴛᴇᴅ {paused} ᴄʜᴀᴛꜱ")
 
     # Build response message
     response = f"""
@@ -2212,6 +1843,248 @@ async def cmd_joinlink(client, message):
         
         await status_msg.edit_text(error_msg)
         
+# ===== JOIN GROUP COMMAND (PUBLIC + PRIVATE) =====
+
+@bot_app.on_message(pyro_filters.command("joingroup") & authorized_only())
+async def cmd_joingroup(client, message):
+    """
+    ᴊᴏɪɴ ᴀ ᴘᴜʙʟɪᴄ ᴏʀ ᴘʀɪᴠᴀᴛᴇ ɢʀᴏᴜᴘ/ᴄʜᴀɴɴᴇʟ
+    - ᴘᴜʙʟɪᴄ: ᴜꜱᴇ ᴜꜱᴇʀɴᴀᴍᴇ ᴏʀ ᴄʜᴀᴛ ɪᴅ
+    - ᴘʀɪᴠᴀᴛᴇ: ᴜꜱᴇ ɪɴᴠɪᴛᴇ ʟɪɴᴋ (ꜱᴇɴᴅꜱ ʀᴇQᴜᴇꜱᴛ ɪꜰ ɴᴇᴇᴅᴇᴅ)
+    - ᴏɴʟʏ ᴊᴏɪɴꜱ - ᴅᴏᴇꜱ ɴᴏᴛ ꜱᴛᴀʀᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ
+    """
+    parts = message.text.split()
+    
+    if len(parts) < 2:
+        help_text = """
+❌ **ᴜꜱᴀɢᴇ:** `/joingroup <ᴜꜱᴇʀɴᴀᴍᴇ/ɪɴᴠɪᴛᴇ_ʟɪɴᴋ/ᴄʜᴀᴛ_ɪᴅ>`
+
+────────────────────
+📌 **ᴇxᴀᴍᴘʟᴇꜱ:**
+
+**ᴘᴜʙʟɪᴄ ɢʀᴏᴜᴘ/ᴄʜᴀɴɴᴇʟ:**
+`/joingroup @ᴘᴜʙʟɪᴄᴄʜᴀᴛ`
+`/joingroup -1001234567890`
+
+**ᴘʀɪᴠᴀᴛᴇ ɢʀᴏᴜᴘ/ᴄʜᴀɴɴᴇʟ:**
+`/joingroup https://t.me/joinchat/ABC123xyz`
+`/joingroup https://t.me/+ABC123xyz`
+
+────────────────────
+📋 **ʟɪɴᴋ ᴛʏᴘᴇꜱ:**
+• **ᴅɪʀᴇᴄᴛ** - ɪɴꜱᴛᴀɴᴛ ᴊᴏɪɴ (ɴᴏ ᴀᴘᴘʀᴏᴠᴀʟ ɴᴇᴇᴅᴇᴅ)
+• **ʀᴇQᴜᴇꜱᴛ** - ꜱᴇɴᴅꜱ ᴊᴏɪɴ ʀᴇQᴜᴇꜱᴛ (ᴀᴡᴀɪᴛꜱ ᴀᴅᴍɪɴ ᴀᴘᴘʀᴏᴠᴀʟ)
+
+────────────────────
+⚠️ **ɴᴏᴛᴇ:**
+• ᴛʜɪꜱ ᴄᴏᴍᴍᴀɴᴅ ᴏɴʟʏ ᴊᴏɪɴꜱ - ɴᴏ ᴀᴜᴛᴏ-ꜰᴏʀᴡᴀʀᴅɪɴɢ
+• ᴜꜱᴇ `/ᴊᴏɪɴ <ɪᴅ>` ꜱᴇᴘᴀʀᴀᴛᴇʟʏ ᴛᴏ ꜱᴛᴀʀᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ
+"""
+        await message.reply(help_text)
+        return
+    
+    input_value = parts[1].strip()
+    input_value = re.sub(r'[<>]', '', input_value)
+    
+    status_msg = await message.reply(
+        f"🔄 **ᴘʀᴏᴄᴇꜱꜱɪɴɢ ᴊᴏɪɴ ʀᴇQᴜᴇꜱᴛ...**\n\n"
+        f"📌 **ᴛᴀʀɢᴇᴛ:** `{input_value}`\n\n"
+        "📡 ᴀᴛᴛᴇᴍᴘᴛɪɴɢ ᴛᴏ ᴊᴏɪɴ..."
+    )
+    
+    try:
+        chat_id = None
+        chat_title = None
+        chat_type = "ᴜɴᴋɴᴏᴡɴ"
+        username = None
+        join_method = "ᴜɴᴋɴᴏᴡɴ"
+        
+        # ===== DETECT INPUT TYPE =====
+        
+        # Check if it's an invite link (private group)
+        if any(pattern in input_value for pattern in ['t.me/joinchat', 't.me/+', 'telegram.me/joinchat', 'telegram.me/+']):
+            join_method = "ɪɴᴠɪᴛᴇ ʟɪɴᴋ (ᴘʀɪᴠᴀᴛᴇ)"
+            
+            # Try to join via invite link
+            try:
+                joined_chat = await user_app.join_chat(input_value)
+                chat_id = joined_chat.id
+                chat_title = getattr(joined_chat, 'title', str(chat_id))
+                chat_type = "ɢʀᴏᴜᴘ" if hasattr(joined_chat, 'title') else "ᴄʜᴀɴɴᴇʟ"
+                
+                try:
+                    chat = await user_app.get_chat(chat_id)
+                    if hasattr(chat, 'username') and chat.username:
+                        username = f"@{chat.username}"
+                    else:
+                        username = "ᴘʀɪᴠᴀᴛᴇ"
+                except:
+                    username = "ᴘʀɪᴠᴀᴛᴇ"
+                    
+            except Exception as e:
+                error_str = str(e).lower()
+                
+                # Handle join request links
+                if any(keyword in error_str for keyword in ['request', 'approval', 'wait', 'pending']):
+                    await status_msg.edit_text(
+                        f"📨 **ᴊᴏɪɴ ʀᴇQᴜᴇꜱᴛ ꜱᴇɴᴛ!**\n\n"
+                        f"🔗 `{input_value}`\n"
+                        f"📋 **ᴛʏᴘᴇ:** 🔵 ʀᴇQᴜᴇꜱᴛ ʟɪɴᴋ (ɴᴇᴇᴅꜱ ᴀᴅᴍɪɴ ᴀᴘᴘʀᴏᴠᴀʟ)\n\n"
+                        f"────────────────────\n"
+                        f"⏳ **ꜱᴛᴀᴛᴜꜱ:** ᴘᴇɴᴅɪɴɢ ᴀᴘᴘʀᴏᴠᴀʟ\n\n"
+                        f"💡 **ɴᴇxᴛ ꜱᴛᴇᴘꜱ:**\n"
+                        f"• ᴡᴀɪᴛ ꜰᴏʀ ᴀᴅᴍɪɴ ᴛᴏ ᴀᴘᴘʀᴏᴠᴇ ʏᴏᴜʀ ʀᴇQᴜᴇꜱᴛ\n"
+                        f"• ᴀꜰᴛᴇʀ ᴀᴘᴘʀᴏᴠᴀʟ, ᴜꜱᴇ: `/ᴊᴏɪɴ <ᴄʜᴀᴛ_ɪᴅ>`\n"
+                        f"• ᴛᴏ ɢᴇᴛ ᴄʜᴀᴛ ɪᴅ, ꜰᴏʀᴡᴀʀᴅ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴛᴏ @ꜱᴛᴀᴛᴜꜱʀᴏʙᴏᴛ"
+                    )
+                    return
+                else:
+                    raise e
+        
+        # Check if it's a username (public chat)
+        elif input_value.startswith('@'):
+            join_method = "ᴜꜱᴇʀɴᴀᴍᴇ (ᴘᴜʙʟɪᴄ)"
+            username_input = input_value[1:]  # Remove @
+            
+            try:
+                # Try to get chat by username
+                chat = await user_app.get_chat(username_input)
+                chat_id = chat.id
+                chat_title = getattr(chat, 'title', str(chat_id))
+                chat_type = "ɢʀᴏᴜᴘ" if hasattr(chat, 'title') else "ᴄʜᴀɴɴᴇʟ"
+                username = f"@{username_input}"
+                
+                # Try to join (if not already joined)
+                try:
+                    joined_chat = await user_app.join_chat(username_input)
+                    # If we get here, we successfully joined
+                except Exception as e:
+                    error_str = str(e).lower()
+                    if "already" in error_str and "participant" in error_str:
+                        # Already joined, that's fine
+                        pass
+                    elif "invite" in error_str or "private" in error_str:
+                        # Private chat - can't join by username
+                        raise Exception("ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ - ᴜꜱᴇ ɪɴᴠɪᴛᴇ ʟɪɴᴋ ɪɴꜱᴛᴇᴀᴅ")
+                    else:
+                        raise e
+                        
+            except Exception as e:
+                error_str = str(e).lower()
+                if "not found" in error_str:
+                    raise Exception(f"ᴜꜱᴇʀɴᴀᴍᴇ `{input_value}` ɴᴏᴛ ꜰᴏᴜɴᴅ")
+                elif "private" in error_str:
+                    raise Exception(f"`{input_value}` ɪꜱ ᴀ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ - ᴜꜱᴇ ɪɴᴠɪᴛᴇ ʟɪɴᴋ")
+                else:
+                    raise e
+        
+        # Check if it's a numeric chat ID
+        elif input_value.lstrip('-').isdigit():
+            join_method = "ᴄʜᴀᴛ ɪᴅ (ᴅɪʀᴇᴄᴛ)"
+            chat_id = int(input_value)
+            
+            try:
+                # Try to get chat info
+                chat = await user_app.get_chat(chat_id)
+                chat_title = getattr(chat, 'title', str(chat_id))
+                chat_type = "ɢʀᴏᴜᴘ" if hasattr(chat, 'title') else "ᴄʜᴀɴɴᴇʟ"
+                
+                if hasattr(chat, 'username') and chat.username:
+                    username = f"@{chat.username}"
+                else:
+                    username = "ᴘʀɪᴠᴀᴛᴇ"
+                    
+                # Try to join by username if available
+                if hasattr(chat, 'username') and chat.username:
+                    try:
+                        await user_app.join_chat(chat.username)
+                    except Exception as e:
+                        error_str = str(e).lower()
+                        if "already" in error_str and "participant" in error_str:
+                            pass
+                        else:
+                            raise e
+                else:
+                    # Private chat - try to join by ID (may not work)
+                    try:
+                        await user_app.join_chat(chat_id)
+                    except Exception as e:
+                        error_str = str(e).lower()
+                        if "already" in error_str and "participant" in error_str:
+                            pass
+                        else:
+                            raise Exception("ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ - ᴜꜱᴇ ɪɴᴠɪᴛᴇ ʟɪɴᴋ ᴛᴏ ᴊᴏɪɴ")
+                            
+            except Exception as e:
+                error_str = str(e).lower()
+                if "not found" in error_str:
+                    raise Exception(f"ᴄʜᴀᴛ `{chat_id}` ɴᴏᴛ ꜰᴏᴜɴᴅ")
+                else:
+                    raise e
+        
+        else:
+            await status_msg.edit_text(
+                f"❌ **ɪɴᴠᴀʟɪᴅ ɪɴᴘᴜᴛ ꜰᴏʀᴍᴀᴛ!**\n\n"
+                f"📌 **ʏᴏᴜ ᴇɴᴛᴇʀᴇᴅ:** `{input_value}`\n\n"
+                f"💡 **ꜱᴜᴘᴘᴏʀᴛᴇᴅ ꜰᴏʀᴍᴀᴛꜱ:**\n"
+                f"• ᴜꜱᴇʀɴᴀᴍᴇ: `@ᴘᴜʙʟɪᴄᴄʜᴀᴛ`\n"
+                f"• ᴄʜᴀᴛ ɪᴅ: `-1001234567890`\n"
+                f"• ɪɴᴠɪᴛᴇ ʟɪɴᴋ: `https://t.me/joinchat/...`"
+            )
+            return
+        
+        # ===== SUCCESSFULLY JOINED =====
+        join_msg = f"""
+✅ **ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ ᴊᴏɪɴᴇᴅ!**
+
+────────────────────
+📌 **ɴᴀᴍᴇ:** {chat_title}
+📋 **ᴛʏᴘᴇ:** {chat_type}
+🔗 **ᴊᴏɪɴ ᴍᴇᴛʜᴏᴅ:** {join_method}
+🎯 **ɪᴅ:** `{chat_id}`
+👤 **ᴜꜱᴇʀɴᴀᴍᴇ:** {username}
+
+────────────────────
+💡 **ɴᴇxᴛ ꜱᴛᴇᴘꜱ:**
+• ᴛᴏ ꜱᴛᴀʀᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ: `/ᴊᴏɪɴ {chat_id}`
+• ᴛᴏ ᴄʜᴇᴄᴋ ᴀʟʟ ꜰᴏʀᴡᴀʀᴅꜱ: `/ʟɪꜱᴛ`
+• ᴛᴏ ꜱᴛᴏᴘ ꜰᴏʀᴡᴀʀᴅɪɴɢ: `/ʟᴇᴀᴠᴇ {chat_id}`
+
+────────────────────
+📊 **ᴄᴜʀʀᴇɴᴛ ꜱᴛᴀᴛᴜꜱ:**
+• ʀᴇᴄᴏʀᴅɪɴɢ: {'🟢 ᴀᴄᴛɪᴠᴇ' if is_recording else '🔴 ɪɴᴀᴄᴛɪᴠᴇ'}
+• ꜰᴏʀᴡᴀʀᴅɪɴɢ: {len(forward_chats)} ᴄʜᴀᴛꜱ
+• ꜱᴏᴜʀᴄᴇ: `{RECORD_SOURCE}`
+"""
+        await status_msg.edit_text(join_msg)
+        logger.info(f"ᴊᴏɪɴᴇᴅ ᴠɪᴀ {join_method}: {chat_id} - {chat_title} (ɴᴏ ᴀᴜᴛᴏ-ꜰᴏʀᴡᴀʀᴅ)")
+        
+    except Exception as e:
+        error_msg = str(e)
+        logger.error(f"ᴊᴏɪɴɢʀᴏᴜᴘ ᴇʀʀᴏʀ: {error_msg}")
+        
+        # ===== HANDLE SPECIFIC ERRORS =====
+        error_str = error_msg.lower()
+        
+        if "invite" in error_str and "expired" in error_str:
+            response = "❌ **ɪɴᴠɪᴛᴇ ʟɪɴᴋ ʜᴀꜱ ᴇxᴘɪʀᴇᴅ!**\n\nᴘʟᴇᴀꜱᴇ ᴀꜱᴋ ꜰᴏʀ ᴀ ɴᴇᴡ ɪɴᴠɪᴛᴇ ʟɪɴᴋ."
+        elif "invalid" in error_str and "hash" in error_str:
+            response = f"❌ **ɪɴᴠᴀʟɪᴅ ɪɴᴠɪᴛᴇ ʟɪɴᴋ!**\n\n📌 `{input_value}`\n\nᴘʟᴇᴀꜱᴇ ᴄʜᴇᴄᴋ ᴛʜᴇ ʟɪɴᴋ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ."
+        elif "flood" in error_str:
+            response = "⚠️ **ꜰʟᴏᴏᴅ ᴄᴏɴᴛʀᴏʟ!**\n\nᴘʟᴇᴀꜱᴇ ᴡᴀɪᴛ ᴀ ꜰᴇᴡ ᴍɪɴᴜᴛᴇꜱ ʙᴇꜰᴏʀᴇ ᴛʀʏɪɴɢ ᴀɢᴀɪɴ."
+        elif "not found" in error_str:
+            response = f"❌ **ᴄʜᴀᴛ ɴᴏᴛ ꜰᴏᴜɴᴅ!**\n\n📌 `{input_value}`\n\nᴛʜᴇ ᴄʜᴀᴛ ᴍᴀʏ ɴᴏᴛ ᴇxɪꜱᴛ ᴏʀ ʏᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ ᴀᴄᴄᴇꜱꜱ."
+        elif "private" in error_str:
+            response = f"❌ **ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ!**\n\n📌 `{input_value}`\n\nᴜꜱᴇ ᴀɴ ɪɴᴠɪᴛᴇ ʟɪɴᴋ ᴛᴏ ᴊᴏɪɴ ᴛʜɪꜱ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ."
+        elif "user" in error_str and "deactivated" in error_str:
+            response = "❌ **ᴜꜱᴇʀ ᴀᴄᴄᴏᴜɴᴛ ɪꜱꜱᴜᴇ!**\n\nᴛʜᴇ ʙᴏᴛ ᴜꜱᴇʀ ᴀᴄᴄᴏᴜɴᴛ ᴍᴀʏ ʜᴀᴠᴇ ʙᴇᴇɴ ʟᴏɢɢᴇᴅ ᴏᴜᴛ."
+        elif "already" in error_str and "participant" in error_str:
+            response = f"ℹ️ **ᴀʟʀᴇᴀᴅʏ ᴀ ᴘᴀʀᴛɪᴄɪᴘᴀɴᴛ!**\n\n📌 `{input_value}`\n\nʏᴏᴜ ᴀʀᴇ ᴀʟʀᴇᴀᴅʏ ɪɴ ᴛʜɪꜱ ᴄʜᴀᴛ."
+        else:
+            response = f"❌ **ᴇʀʀᴏʀ ᴏᴄᴄᴜʀʀᴇᴅ!**\n\n⚠️ `{error_msg[:200]}`"
+        
+        await status_msg.edit_text(response)        
+        
 # ===== ᴍᴜᴛᴇ/ᴜɴᴍᴜᴛᴇ ᴄᴏᴍᴍᴀɴᴅꜱ =====
 
 @bot_app.on_message(pyro_filters.command("mute") & authorized_only())
@@ -2227,7 +2100,7 @@ async def cmd_mute(client, message):
         )
         return
     
-    # ✅ Sirf forward chats ko pause karo (Source ko mat chhedo)
+    # Sirf forward chats ko pause karo (Source ko mat chhedo)
     paused_count = 0
     for chat_id in list(forward_chats):
         try:
@@ -2237,6 +2110,7 @@ async def cmd_mute(client, message):
             logger.debug(f"ᴄᴏᴜʟᴅ ɴᴏᴛ ᴘᴀᴜꜱᴇ {chat_id}: {e}")
     
     is_muted = True
+    save_state()
     
     mute_msg = f"""
 🔇 **ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅɪɴɢ ᴍᴜᴛᴇᴅ!**
@@ -2268,7 +2142,7 @@ async def cmd_unmute(client, message):
         )
         return
     
-    # ✅ Sirf forward chats ko resume karo (Source ko mat chhedo)
+    # Sirf forward chats ko resume karo (Source ko mat chhedo)
     resumed_count = 0
     for chat_id in list(forward_chats):
         try:
@@ -2278,6 +2152,7 @@ async def cmd_unmute(client, message):
             logger.debug(f"ᴄᴏᴜʟᴅ ɴᴏᴛ ʀᴇꜱᴜᴍᴇ {chat_id}: {e}")
     
     is_muted = False
+    save_state()
     
     unmute_msg = f"""
 🔊 **ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅɪɴɢ ʀᴇꜱᴜᴍᴇᴅ!**
@@ -2306,11 +2181,14 @@ async def cmd_automute(client, message):
     
     # Agar sirf /automute likha hai toh status dikhao
     if len(parts) < 2:
-        status = "🟢 ᴏɴ" if auto_mute_enabled else "🔴 ᴏꜰꜰ"
+        status_icon = "🟢" if auto_mute_enabled else "🔴"
+        status_text = "ᴏɴ" if auto_mute_enabled else "ᴏꜰꜰ"
         await message.reply(
-            f"🎛️ **ᴀᴜᴛᴏᴍᴜᴛᴇ ꜱᴛᴀᴛᴜꜱ:** {status}\n\n"
-            f"💡 `/automute on` - ᴀᴜᴛᴏ ᴍᴜᴛᴇ ᴏɴ\n"
-            f"💡 `/automute off` - ᴀᴜᴛᴏ ᴍᴜᴛᴇ ᴏꜰꜰ"
+            f"🎛️ **ᴀᴜᴛᴏᴍᴜᴛᴇ ꜱᴛᴀᴛᴜꜱ:** {status_icon} {status_text}\n\n"
+            f"📊 **ᴄᴜʀʀᴇɴᴛ ꜱᴛᴀᴛᴇ:** {'🔇 ᴍᴜᴛᴇᴅ' if is_muted else '🔊 ʟɪᴠᴇ'}\n\n"
+            f"💡 `/automute on` - ɴᴇᴡ ᴊᴏɪɴꜱ ᴀᴜᴛᴏ ᴍᴜᴛᴇ\n"
+            f"💡 `/automute off` - ɴᴇᴡ ᴊᴏɪɴꜱ ᴀᴜᴛᴏ ᴜɴᴍᴜᴛᴇ\n"
+            f"💡 `/automute off` - ᴀʟʟ ᴄʜᴀᴛꜱ ᴜɴᴍᴜᴛᴇ"
         )
         return
     
@@ -2318,32 +2196,39 @@ async def cmd_automute(client, message):
     
     if mode == "on":
         auto_mute_enabled = True
-        save_state()
         
-        # Agar abhi muted nahi hai toh saare existing chats ko mute kardo
-        if not is_muted and forward_chats:
-            paused = 0
-            for chat_id in list(forward_chats):
-                try:
-                    await call_py.pause_stream(chat_id)
-                    paused += 1
-                except Exception:
-                    pass
-            if paused:
-                is_muted = True
+        # 🔥 FIX: SIRF NAYE JOINS KE LIYE - OLD CHATS KO MAT CHHEDO
+        # Purane chats ko mute mat karo! Sirf naye join hone par mute honge
+        save_state()
         
         await message.reply(
             "✅ **ᴀᴜᴛᴏᴍᴜᴛᴇ ᴇɴᴀʙʟᴇᴅ!**\n\n"
-            f"🔇 {len(forward_chats)} ᴄʜᴀᴛꜱ ᴍᴜᴛᴇᴅ\n"
-            "🆕 Nᴇᴡ ᴊᴏɪɴꜱ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏ-ᴍᴜᴛᴇᴅ"
+            f"📊 **ᴄᴜʀʀᴇɴᴛ ꜱᴛᴀᴛᴇ:** {'🔇 ᴍᴜᴛᴇᴅ' if is_muted else '🔊 ʟɪᴠᴇ'}\n"
+            "🆕 Nᴇᴡ ᴊᴏɪɴꜱ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏ-ᴍᴜᴛᴇᴅ\n"
+            "📌 Exɪꜱᴛɪɴɢ ᴄʜᴀᴛꜱ ᴡɪʟʟ ʀᴇᴍᴀɪɴ ᴜɴᴄʜᴀɴɢᴇᴅ"
         )
     
     elif mode == "off":
         auto_mute_enabled = False
-        save_state()
+        
+        # 🔥 FIX: OFF KARNE PAR SAB UNMUTE KARO
+        unmuted_count = 0
+        if forward_chats:
+            for chat_id in list(forward_chats):
+                try:
+                    await call_py.resume_stream(chat_id)
+                    unmuted_count += 1
+                except Exception:
+                    pass
+            if unmuted_count > 0:
+                is_muted = False
+                save_state()
+        
         await message.reply(
-            "❌ **ᴀᴜᴛᴏᴍᴜᴛᴇ ᴅɪꜱᴀʙʟᴇᴅ!**\n\n"
-            "🔊 Nᴇᴡ ᴊᴏɪɴꜱ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏ-ᴜɴᴍᴜᴛᴇᴅ"
+            "✅ **ᴀᴜᴛᴏᴍᴜᴛᴇ ᴅɪꜱᴀʙʟᴇᴅ!**\n\n"
+            f"🔊 {unmuted_count} ᴄʜᴀᴛꜱ ᴜɴᴍᴜᴛᴇᴅ\n"
+            f"📊 **ᴄᴜʀʀᴇɴᴛ ꜱᴛᴀᴛᴇ:** 🔊 ʟɪᴠᴇ\n"
+            "🆕 Nᴇᴡ ᴊᴏɪɴꜱ ᴡɪʟʟ ʙᴇ ᴀᴜᴛᴏ-ᴜɴᴍᴜᴛᴇᴅ"
         )
     
     else:
@@ -2519,208 +2404,14 @@ async def cmd_gain(client, message):
             f"💡 ᴘʟᴇᴀꜱᴇ ᴇɴᴛᴇʀ ᴀ ɴᴜᴍᴇʀɪᴄ ᴠᴀʟᴜᴇ"
         )
 
-@bot_app.on_message(pyro_filters.command("a1") & authorized_only())
-async def cmd_advanced(client, message):
-    """ᴀᴅᴠᴀɴᴄᴇᴅ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ᴄᴏɴᴛʀᴏʟ"""
-    parts = message.text.split()
-    
-    if len(parts) < 2:
-        # Show current status with visual indicators
-        adv = ADVANCED_AUDIO_CONFIG
-        
-        # Create status bars for each effect
-        def get_bar(val):
-            normalized = (val + 50) / 100
-            filled = int(normalized * 10)
-            return "█" * filled + "░" * (10 - filled)
-        
-        def get_status(val):
-            if val == 0:
-                return "⚪ ᴏꜰꜰ"
-            elif val > 0:
-                return "🟢 ᴇɴʜᴀɴᴄᴇᴅ"
-            else:
-                return "🔵 ʀᴇᴅᴜᴄᴇᴅ"
-        
-        status_msg = f"""
-🎛️ **ᴀᴅᴠᴀɴᴄᴇᴅ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ**
-
-────────────────────
-**ᴄᴜʀʀᴇɴᴛ ꜱᴇᴛᴛɪɴɢꜱ:**
-
-• **ɴꜱ** (ɴᴏɪꜱᴇ ꜱᴜᴘᴘʀᴇꜱꜱɪᴏɴ): `{adv['ns']:+.0f}` {get_bar(adv['ns'])} {get_status(adv['ns'])}
-• **ʜᴘꜰ** (ʜɪɢʜ ᴘᴀꜱꜱ ꜰɪʟᴛᴇʀ): `{adv['hpf']:+.0f}` {get_bar(adv['hpf'])} {get_status(adv['hpf'])}
-• **ᴅᴇ** (ᴅᴇ-ᴇꜱꜱᴇʀ): `{adv['deesser']:+.0f}` {get_bar(adv['deesser'])} {get_status(adv['deesser'])}
-• **ᴇQ** (ᴘʀᴇꜱᴇɴᴄᴇ ᴇQ): `{adv['presence_eq']:+.0f}` {get_bar(adv['presence_eq'])} {get_status(adv['presence_eq'])}
-• **ʟᴏᴜᴅ** (ʟᴏᴜᴅɴᴇꜱꜱ ɴᴏʀᴍ): `{adv['loudness']:+.0f}` {get_bar(adv['loudness'])} {get_status(adv['loudness'])}
-• **ʟɪᴍ** (ʟᴏᴏᴋ-ᴀʜᴇᴀᴅ ʟɪᴍɪᴛᴇʀ): `{adv['limiter']:+.0f}` {get_bar(adv['limiter'])} {get_status(adv['limiter'])}
-• **ɢᴀᴛᴇ** (ɴᴏɪꜱᴇ ɢᴀᴛᴇ): `{adv['noisegate']:+.0f}` {get_bar(adv['noisegate'])} {get_status(adv['noisegate'])}
-• **ᴅᴄ** (ᴅᴄ ᴏꜰꜰꜱᴇᴛ): `{adv['dc_offset']:+.0f}` {get_bar(adv['dc_offset'])} {get_status(adv['dc_offset'])}
-• **ꜱᴀᴛ** (ꜱᴏꜰᴛ ꜱᴀᴛᴜʀᴀᴛɪᴏɴ): `{adv['saturation']:+.0f}` {get_bar(adv['saturation'])} {get_status(adv['saturation'])}
-• **ꜱᴛ** (ꜱᴛᴇʀᴇᴏ ᴡɪᴅᴛʜ): `{adv['stereo_width']:+.0f}` {get_bar(adv['stereo_width'])} {get_status(adv['stereo_width'])}
-
-────────────────────
-📌 **ᴜꜱᴀɢᴇ:** `/a1 <ᴇꜰꜰᴇᴄᴛ> <ᴠᴀʟᴜᴇ>`
-
-**ᴇꜰꜰᴇᴄᴛꜱ:**
-• `ns`   - ɴᴏɪꜱᴇ ꜱᴜᴘᴘʀᴇꜱꜱɪᴏɴ (-50 ᴛᴏ +50)
-• `hpf`  - ʜɪɢʜ ᴘᴀꜱꜱ ꜰɪʟᴛᴇʀ (-50 ᴛᴏ +50)
-• `de`   - ᴅᴇ-ᴇꜱꜱᴇʀ (-50 ᴛᴏ +50)
-• `eq`   - ᴘʀᴇꜱᴇɴᴄᴇ ᴇQ (-50 ᴛᴏ +50)
-• `loud` - ʟᴏᴜᴅɴᴇꜱꜱ ɴᴏʀᴍ (-50 ᴛᴏ +50)
-• `lim`  - ʟɪᴍɪᴛᴇʀ (-50 ᴛᴏ +50)
-• `gate` - ɴᴏɪꜱᴇ ɢᴀᴛᴇ (-50 ᴛᴏ +50)
-• `dc`   - ᴅᴄ ᴏꜰꜰꜱᴇᴛ (-50 ᴛᴏ +50)
-• `sat`  - ꜱᴀᴛᴜʀᴀᴛɪᴏɴ (-50 ᴛᴏ +50)
-• `st`   - ꜱᴛᴇʀᴇᴏ ᴡɪᴅᴛʜ (-50 ᴛᴏ +50)
-
-**ᴇxᴀᴍᴘʟᴇꜱ:**
-• `/a1 ns 30` - ɴᴏɪꜱᴇ ꜱᴜᴘᴘʀᴇꜱꜱɪᴏɴ +30
-• `/a1 eq -15` - ᴘʀᴇꜱᴇɴᴄᴇ ᴇQ -15
-• `/a1 loud 40` - ʟᴏᴜᴅɴᴇꜱꜱ ɴᴏʀᴍ +40
-• `/a1 reset` - ʀᴇꜱᴇᴛ ᴀʟʟ ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛꜱ
-"""
-        await message.reply(status_msg)
-        return
-    
-    command = parts[1].lower()
-    
-    # Handle reset
-    if command == "reset":
-        old_advanced = ADVANCED_AUDIO_CONFIG.copy()
-        for key in ADVANCED_AUDIO_CONFIG:
-            ADVANCED_AUDIO_CONFIG[key] = 0
-        save_state()
-        
-        reset_msg = f"""
-🔄 **ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛꜱ ʀᴇꜱᴇᴛ!**
-
-────────────────────
-📊 **ᴀʟʟ ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛꜱ ꜱᴇᴛ ᴛᴏ `0`**
-
-✅ ɴᴏɪꜱᴇ ꜱᴜᴘᴘʀᴇꜱꜱɪᴏɴ: `{old_advanced['ns']:+.0f}` → `0`
-✅ ʜɪɢʜ ᴘᴀꜱꜱ ꜰɪʟᴛᴇʀ: `{old_advanced['hpf']:+.0f}` → `0`
-✅ ᴅᴇ-ᴇꜱꜱᴇʀ: `{old_advanced['deesser']:+.0f}` → `0`
-✅ ᴘʀᴇꜱᴇɴᴄᴇ ᴇQ: `{old_advanced['presence_eq']:+.0f}` → `0`
-✅ ʟᴏᴜᴅɴᴇꜱꜱ ɴᴏʀᴍ: `{old_advanced['loudness']:+.0f}` → `0`
-✅ ʟɪᴍɪᴛᴇʀ: `{old_advanced['limiter']:+.0f}` → `0`
-✅ ɴᴏɪꜱᴇ ɢᴀᴛᴇ: `{old_advanced['noisegate']:+.0f}` → `0`
-✅ ᴅᴄ ᴏꜰꜰꜱᴇᴛ: `{old_advanced['dc_offset']:+.0f}` → `0`
-✅ ꜱᴀᴛᴜʀᴀᴛɪᴏɴ: `{old_advanced['saturation']:+.0f}` → `0`
-✅ ꜱᴛᴇʀᴇᴏ ᴡɪᴅᴛʜ: `{old_advanced['stereo_width']:+.0f}` → `0`
-
-────────────────────
-💡 **ᴛɪᴘ:** ᴜꜱᴇ `/ʀᴇꜱᴇᴛ` ꜰᴏʀ ᴄᴏᴍᴘʟᴇᴛᴇ ʀᴇꜱᴇᴛ (ʙᴀꜱɪᴄ + ᴀᴅᴠᴀɴᴄᴇᴅ)
-"""
-        await message.reply(reset_msg)
-        return
-    
-    # Check if value is provided
-    if len(parts) < 3:
-        await message.reply(
-            f"❌ **ᴜꜱᴀɢᴇ:** `/a1 {command} <ᴠᴀʟᴜᴇ>`\n\n"
-            f"📌 **ᴠᴀʟᴜᴇ ʀᴀɴɢᴇ:** `-50` ᴛᴏ `+50`\n"
-            f"💡 **ᴇxᴀᴍᴘʟᴇ:** `/a1 {command} 30`"
-        )
-        return
-    
-    try:
-        value = int(parts[2])
-        if value < -50 or value > 50:
-            await message.reply(
-                f"❌ **ɪɴᴠᴀʟɪᴅ ᴠᴀʟᴜᴇ!**\n\n"
-                f"📌 **ʀᴀɴɢᴇ:** `-50` ᴛᴏ `+50`\n"
-                f"📊 **ʏᴏᴜ ᴇɴᴛᴇʀᴇᴅ:** `{value}`"
-            )
-            return
-        
-        # Effect mapping
-        effect_map = {
-            'ns': 'ns',
-            'hpf': 'hpf',
-            'de': 'deesser',
-            'eq': 'presence_eq',
-            'loud': 'loudness',
-            'lim': 'limiter',
-            'gate': 'noisegate',
-            'dc': 'dc_offset',
-            'sat': 'saturation',
-            'st': 'stereo_width'
-        }
-        
-        if command not in effect_map:
-            await message.reply(
-                f"❌ **ᴜɴᴋɴᴏᴡɴ ᴇꜰꜰᴇᴄᴛ!**\n\n"
-                f"📌 **ᴀᴠᴀɪʟᴀʙʟᴇ:** `ns`, `hpf`, `de`, `eq`, `loud`, `lim`, `gate`, `dc`, `sat`, `st`"
-            )
-            return
-        
-        key = effect_map[command]
-        old_value = ADVANCED_AUDIO_CONFIG[key]
-        ADVANCED_AUDIO_CONFIG[key] = value
-        save_state()
-        
-        # Effect names for display
-        effect_names = {
-            'ns': 'ɴᴏɪꜱᴇ ꜱᴜᴘᴘʀᴇꜱꜱɪᴏɴ',
-            'hpf': 'ʜɪɢʜ ᴘᴀꜱꜱ ꜰɪʟᴛᴇʀ',
-            'deesser': 'ᴅᴇ-ᴇꜱꜱᴇʀ',
-            'presence_eq': 'ᴘʀᴇꜱᴇɴᴄᴇ ᴇQ',
-            'loudness': 'ʟᴏᴜᴅɴᴇꜱꜱ ɴᴏʀᴍᴀʟɪᴢᴀᴛɪᴏɴ',
-            'limiter': 'ʟᴏᴏᴋ-ᴀʜᴇᴀᴅ ʟɪᴍɪᴛᴇʀ',
-            'noisegate': 'ɴᴏɪꜱᴇ ɢᴀᴛᴇ / ᴇxᴘᴀɴᴅᴇʀ',
-            'dc_offset': 'ᴅᴄ ᴏꜰꜰꜱᴇᴛ ʀᴇᴍᴏᴠᴀʟ',
-            'saturation': 'ꜱᴏꜰᴛ ꜱᴀᴛᴜʀᴀᴛɪᴏɴ / ᴇxᴄɪᴛᴇʀ',
-            'stereo_width': 'ꜱᴛᴇʀᴇᴏ ᴡɪᴅᴛʜ / ᴍᴏɴᴏ ᴏᴘᴛɪᴍɪᴢᴀᴛɪᴏɴ'
-        }
-        
-        # Create visual bar
-        bar_length = 10
-        normalized = (value + 50) / 100
-        filled = int(normalized * bar_length)
-        bar = "█" * filled + "░" * (bar_length - filled)
-        
-        # Status text
-        if value == 0:
-            status = "⚪ ᴏꜰꜰ"
-            emoji = "⚪"
-        elif value > 0:
-            status = "🟢 ᴇɴʜᴀɴᴄᴇᴅ"
-            emoji = "🟢"
-        else:
-            status = "🔵 ʀᴇᴅᴜᴄᴇᴅ"
-            emoji = "🔵"
-        
-        # Response message
-        response = f"""
-✅ **ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛ ᴜᴘᴅᴀᴛᴇᴅ!**
-
-────────────────────
-🎛️ **ᴇꜰꜰᴇᴄᴛ:** {effect_names[key]}
-📊 **ᴏʟᴅ:** `{old_value:+.0f}` → **ɴᴇᴡ:** `{value:+.0f}`
-📈 **ʟᴇᴠᴇʟ:** {bar} `{value:+.0f}`
-📌 **ꜱᴛᴀᴛᴜꜱ:** {status}
-
-────────────────────
-💡 **ᴜꜱᴇ `/a1` ᴛᴏ ꜱʜᴏᴡ ᴀʟʟ ꜱᴇᴛᴛɪɴɢꜱ**
-"""
-        await message.reply(response)
-        
-    except ValueError:
-        await message.reply(
-            f"❌ **ɪɴᴠᴀʟɪᴅ ɴᴜᴍʙᴇʀ!**\n\n"
-            f"📌 **ʏᴏᴜ ᴇɴᴛᴇʀᴇᴅ:** `{parts[2]}`\n"
-            f"💡 ᴘʟᴇᴀꜱᴇ ᴇɴᴛᴇʀ ᴀ ɴᴜᴍᴇʀɪᴄ ᴠᴀʟᴜᴇ (-50 ᴛᴏ +50)"
-        )
         
 @bot_app.on_message(pyro_filters.command("reset") & authorized_only())
 async def cmd_reset(client, message):
-    """ʀᴇꜱᴇᴛ ᴀʟʟ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ (ʙᴀꜱɪᴄ + ᴀᴅᴠᴀɴᴄᴇᴅ)"""
+    """ʀᴇꜱᴇᴛ ᴀʟʟ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ"""
     global audio_config
     
     # Save old configs for comparison
     old_config = audio_config.copy()
-    old_advanced = ADVANCED_AUDIO_CONFIG.copy()
     
     # Reset basic audio config
     audio_config = {
@@ -2734,14 +2425,7 @@ async def cmd_reset(client, message):
         'lowpass': False
     }
     
-    # Reset advanced audio config (all to 0)
-    for key in ADVANCED_AUDIO_CONFIG:
-        ADVANCED_AUDIO_CONFIG[key] = 0
-    
     save_state()
-    
-    # Check if advanced effects were active
-    advanced_was_active = any(old_advanced[key] != 0 for key in old_advanced)
     
     reset_msg = f"""
 ✅ **ᴀʟʟ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ʀᴇꜱᴇᴛ!**
@@ -2753,40 +2437,30 @@ async def cmd_reset(client, message):
 📈 **ɢᴀɪɴ:** `{old_config['gain']}` → `{audio_config['gain']}` ✅
 
 ────────────────────
-⚙️ **ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛꜱ:** {'🟢 ᴄʟᴇᴀʀᴇᴅ' if advanced_was_active else '⚪ ᴡᴇʀᴇ ᴀʟʀᴇᴀᴅʏ ᴏꜰꜰ'}
-• **ɴꜱ:** `{old_advanced['ns']:+.0f}` → `0` ✅
-• **ʜᴘꜰ:** `{old_advanced['hpf']:+.0f}` → `0` ✅
-• **ᴅᴇ-ᴇꜱꜱᴇʀ:** `{old_advanced['deesser']:+.0f}` → `0` ✅
-• **ᴘʀᴇꜱᴇɴᴄᴇ ᴇQ:** `{old_advanced['presence_eq']:+.0f}` → `0` ✅
-• **ʟᴏᴜᴅɴᴇꜱꜱ:** `{old_advanced['loudness']:+.0f}` → `0` ✅
-• **ʟɪᴍɪᴛᴇʀ:** `{old_advanced['limiter']:+.0f}` → `0` ✅
-• **ɴᴏɪꜱᴇ ɢᴀᴛᴇ:** `{old_advanced['noisegate']:+.0f}` → `0` ✅
-• **ᴅᴄ ᴏꜰꜰꜱᴇᴛ:** `{old_advanced['dc_offset']:+.0f}` → `0` ✅
-• **ꜱᴀᴛᴜʀᴀᴛɪᴏɴ:** `{old_advanced['saturation']:+.0f}` → `0` ✅
-• **ꜱᴛᴇʀᴇᴏ ᴡɪᴅᴛʜ:** `{old_advanced['stereo_width']:+.0f}` → `0` ✅
+⚙️ **ꜰᴇᴀᴛᴜʀᴇꜱ**
+• ᴄᴏᴍᴘʀᴇꜱꜱᴏʀ: {'✅ ᴇɴᴀʙʟᴇᴅ' if audio_config['compressor'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
+• ʟɪᴍɪᴛᴇʀ: {'✅ ᴇɴᴀʙʟᴇᴅ' if audio_config['limiter'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
+• ʜɪɢʜᴘᴀꜱꜱ: {'✅ ᴇɴᴀʙʟᴇᴅ' if audio_config['highpass'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
+• ʟᴏᴡᴘᴀꜱꜱ: {'✅ ᴇɴᴀʙʟᴇᴅ' if audio_config['lowpass'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
 
 ────────────────────
 📊 **ꜱᴛᴀᴛᴜꜱ:** 🟢 ꜰᴀᴄᴛᴏʀʏ ᴅᴇꜰᴀᴜʟᴛ ʀᴇꜱᴛᴏʀᴇᴅ
-🎯 **ᴇꜰꜰᴇᴄᴛꜱ:** ᴀʟʟ ʙᴀꜱɪᴄ + ᴀᴅᴠᴀɴᴄᴇᴅ ᴄʟᴇᴀʀᴇᴅ
-💡 **ᴛɪᴘ:** ᴜꜱᴇ `/a1` ᴛᴏ ꜱᴇᴛ ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛꜱ
+🎯 **ᴇꜰꜰᴇᴄᴛꜱ:** ᴀʟʟ ʙᴀꜱɪᴄ ᴇꜰꜰᴇᴄᴛꜱ ᴄʟᴇᴀʀᴇᴅ
 """
     await message.reply(reset_msg)
-    logger.info("ᴀʟʟ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ (ʙᴀꜱɪᴄ + ᴀᴅᴠᴀɴᴄᴇᴅ) ʀᴇꜱᴇᴛ ᴛᴏ ᴅᴇꜰᴀᴜʟᴛ")
+    logger.info("ᴀʟʟ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ʀᴇꜱᴇᴛ ᴛᴏ ᴅᴇꜰᴀᴜʟᴛ")
 
 
 @bot_app.on_message(pyro_filters.command("effects") & authorized_only())
 async def cmd_effects(client, message):
-    """ꜱʜᴏᴡ ᴄᴜʀʀᴇɴᴛ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ɪɴᴄʟᴜᴅɪɴɢ ᴀᴅᴠᴀɴᴄᴇᴅ"""
+    """ꜱʜᴏᴡ ᴄᴜʀʀᴇɴᴛ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ"""
     config = audio_config
-    adv_config = ADVANCED_AUDIO_CONFIG
     scipy_status = "✅ ᴀᴅᴠᴀɴᴄᴇᴅ ᴀᴠᴀɪʟᴀʙʟᴇ" if SCIPY_AVAILABLE else "❌ ʙᴀꜱɪᴄ ᴏɴʟʏ"
     
     vol_bar = create_progress_bar(config['volume'], 200)
     bass_bar = create_progress_bar(config['bass'], 60)
     treble_bar = create_progress_bar(config['treble'], 60)
     gain_bar = create_progress_bar(config['gain'], 60)
-    
-    advanced_active = any(adv_config[key] != 0 for key in adv_config)
     
     effects_msg = f"""
 🎛️ **ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ᴅᴀꜱʜʙᴏᴀʀᴅ**
@@ -2805,19 +2479,6 @@ async def cmd_effects(client, message):
 {gain_bar} `{config['gain']}/60`
 
 ────────────────────
-⚙️ **ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛꜱ** {'🟢 ᴀᴄᴛɪᴠᴇ' if advanced_active else '⚪ ɪɴᴀᴄᴛɪᴠᴇ'}
-• **ɴꜱ:** `{adv_config['ns']:+.0f}`
-• **ʜᴘꜰ:** `{adv_config['hpf']:+.0f}`
-• **ᴅᴇ-ᴇꜱꜱᴇʀ:** `{adv_config['deesser']:+.0f}`
-• **ᴘʀᴇꜱᴇɴᴄᴇ ᴇQ:** `{adv_config['presence_eq']:+.0f}`
-• **ʟᴏᴜᴅɴᴇꜱꜱ:** `{adv_config['loudness']:+.0f}`
-• **ʟɪᴍɪᴛᴇʀ:** `{adv_config['limiter']:+.0f}`
-• **ɴᴏɪꜱᴇ ɢᴀᴛᴇ:** `{adv_config['noisegate']:+.0f}`
-• **ᴅᴄ ᴏꜰꜰꜱᴇᴛ:** `{adv_config['dc_offset']:+.0f}`
-• **ꜱᴀᴛᴜʀᴀᴛɪᴏɴ:** `{adv_config['saturation']:+.0f}`
-• **ꜱᴛᴇʀᴇᴏ ᴡɪᴅᴛʜ:** `{adv_config['stereo_width']:+.0f}`
-
-────────────────────
 ⚙️ **ꜰᴇᴀᴛᴜʀᴇꜱ**
 • ᴄᴏᴍᴘʀᴇꜱꜱᴏʀ: {'✅ ᴇɴᴀʙʟᴇᴅ' if config['compressor'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
 • ʟɪᴍɪᴛᴇʀ: {'✅ ᴇɴᴀʙʟᴇᴅ' if config['limiter'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
@@ -2825,8 +2486,6 @@ async def cmd_effects(client, message):
 • ʟᴏᴡᴘᴀꜱꜱ: {'✅ ᴇɴᴀʙʟᴇᴅ' if config['lowpass'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
 
 📦 **ꜱᴄɪᴘʏ:** {scipy_status}
-
-💡 **ᴜꜱᴇ `/a1` ꜰᴏʀ ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛꜱ ᴄᴏɴᴛʀᴏʟ**
 """
     await message.reply(effects_msg)
 
