@@ -474,7 +474,7 @@ def process_audio(audio_data):
 
 async def _forward_incoming_frames(update):
     """ᴘʀᴏᴄᴇꜱꜱ ᴀɴᴅ ꜰᴏʀᴡᴀʀᴅ ᴀᴜᴅɪᴏ ꜰʀᴀᴍᴇꜱ"""
-    global is_muted  # ← YEH LINE ADD KARO
+    global is_muted, forward_chats, RECORD_SOURCE, call_py  # ← FIX: Added all globals
     
     # 🔥 MUTE CHECK - SAB SE PEHLE
     if is_muted:
@@ -506,6 +506,8 @@ async def _forward_incoming_frames(update):
             loop = asyncio.get_running_loop()
             processed_output = await loop.run_in_executor(None, process_audio, mixed_output)
             mixed_bytes = processed_output.tobytes()
+            
+            # ✅ FIX: Copy forward_chats to list to avoid mutation during iteration
             for chat_id in list(forward_chats):
                 try:
                     await call_py.send_frame(chat_id, Device.MICROPHONE, mixed_bytes)
@@ -1443,10 +1445,12 @@ async def cmd_rejoin(client, message):
         "forwards": {"total": 0, "success": 0, "failed": 0, "errors": []}
     }
     
-    # 1. Leave and rejoin source (if recording)
+    # ===== SAVE CURRENT STATE BEFORE REJOIN =====
+    was_muted = is_muted
     was_recording = is_recording
     source_chat = RECORD_SOURCE
     
+    # 1. Leave and rejoin source (if recording)
     if was_recording:
         try:
             # Leave source
@@ -1514,11 +1518,9 @@ async def cmd_rejoin(client, message):
         rejoin_results["forwards"]["status"] = "⏸️"
         rejoin_results["forwards"]["error"] = "ɴᴏ ꜰᴏʀᴡᴀʀᴅ ᴄʜᴀᴛꜱ"
     
-    save_state()
-
-    # ===== FIX 2: RESTORE MUTE STATUS AFTER REJOIN =====
-    # Agar auto_mute_enabled ON hai toh saare chats ko mute karo
-    if auto_mute_enabled and forward_chats:
+    # ===== FIX 2: PROPERLY RESTORE MUTE STATUS AFTER REJOIN =====
+    if was_muted and forward_chats:
+        # If was muted before rejoin, restore mute state
         paused = 0
         for chat_id in list(forward_chats):
             try:
@@ -1528,8 +1530,25 @@ async def cmd_rejoin(client, message):
                 pass
         if paused:
             is_muted = True
-            save_state()
-            logger.info(f"ʀᴇᴊᴏɪɴ ᴀᴜᴛᴏ-ᴍᴜᴛᴇᴅ {paused} ᴄʜᴀᴛꜱ")
+            logger.info(f"ʀᴇꜱᴛᴏʀᴇᴅ ᴍᴜᴛᴇ ꜰᴏʀ {paused} ᴄʜᴀᴛꜱ (ᴡᴀꜱ ᴍᴜᴛᴇᴅ ʙᴇꜰᴏʀᴇ ʀᴇᴊᴏɪɴ)")
+    elif not was_muted and forward_chats:
+        # If was NOT muted before rejoin, ensure all are unmuted
+        resumed = 0
+        for chat_id in list(forward_chats):
+            try:
+                await call_py.resume_stream(chat_id)
+                resumed += 1
+            except Exception:
+                pass
+        if resumed:
+            is_muted = False
+            logger.info(f"ʀᴇꜱᴛᴏʀᴇᴅ ᴜɴᴍᴜᴛᴇ ꜰᴏʀ {resumed} ᴄʜᴀᴛꜱ (ᴡᴀꜱ ᴜɴᴍᴜᴛᴇᴅ ʙᴇꜰᴏʀᴇ ʀᴇᴊᴏɪɴ)")
+    elif was_muted and not forward_chats:
+        # No forward chats, just update state
+        is_muted = False
+        logger.info("ɴᴏ ꜰᴏʀᴡᴀʀᴅ ᴄʜᴀᴛꜱ, ᴍᴜᴛᴇ ꜱᴇᴛ ᴛᴏ ꜰᴀʟꜱᴇ")
+    
+    save_state()
 
     # Build response message
     response = f"""
@@ -1570,8 +1589,8 @@ async def cmd_rejoin(client, message):
 """
     
     await status_msg.edit_text(response)
-    logger.info(f"ʀᴇᴊᴏɪɴ ᴄᴏᴍᴘʟᴇᴛᴇᴅ: ꜱᴏᴜʀᴄᴇ={rejoin_results['source']['status']}, ꜰᴏʀᴡᴀʀᴅꜱ={rejoin_results['forwards']['success']}/{rejoin_results['forwards']['total']}")
-
+    logger.info(f"ʀᴇᴊᴏɪɴ ᴄᴏᴍᴘʟᴇᴛᴇᴅ: ꜱᴏᴜʀᴄᴇ={rejoin_results['source']['status']}, ꜰᴏʀᴡᴀʀᴅꜱ={rejoin_results['forwards']['success']}/{rejoin_results['forwards']['total']}, ᴍᴜᴛᴇ={is_muted}")
+    
 # ===== ʟᴇᴀᴠᴇ ᴄᴏᴍᴍᴀɴᴅꜱ =====
 
 @bot_app.on_message(pyro_filters.command("leaverecord") & authorized_only())
@@ -2639,7 +2658,7 @@ async def cmd_setrecordgroup(client, message):
 @bot_app.on_message(pyro_filters.command("restart") & pyro_filters.user(OWNER_ID))
 async def cmd_restart(client, message):
     """ʀᴇꜱᴛᴀʀᴛ ᴛʜᴇ ʙᴏᴛ - ᴄʟᴇᴀɴ ᴀɴᴅ ʀᴇᴄᴏɴɴᴇᴄᴛ"""
-    global is_recording, is_muted, call_py, forward_chats
+    global is_recording, is_muted, call_py, forward_chats, RECORD_SOURCE  # ← FIX: Added RECORD_SOURCE
     
     try:
         status_msg = await message.reply(
@@ -2665,7 +2684,8 @@ async def cmd_restart(client, message):
             logger.debug(f"ᴄᴏᴜʟᴅ ɴᴏᴛ ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ: {e}")
         
         # Leave all forward chats
-        for chat_id in list(forward_chats):
+        saved_forwards = list(forward_chats)  # ← Moved up before clearing
+        for chat_id in saved_forwards:
             try:
                 await call_py.leave_call(chat_id)
                 left_count += 1
@@ -2674,10 +2694,12 @@ async def cmd_restart(client, message):
                 failed_count += 1
                 logger.debug(f"ᴄᴏᴜʟᴅ ɴᴏᴛ ʟᴇᴀᴠᴇ {chat_id}: {e}")
         
-        # ===== 3. REMEMBER STATE (preserve forwarding list for rejoin) =====
-        saved_forwards = list(forward_chats)
+        # ===== 3. REMEMBER STATE =====
         was_recording = is_recording
+        was_muted = is_muted  # ← NEW: Save mute state
         is_recording = False
+        is_muted = False  # ← NEW: Reset mute during restart
+        forward_chats.clear()  # ← NEW: Clear forward chats during restart
         logger.info("🧹 ʀᴜɴᴛɪᴍᴇ ꜱᴛᴀᴛᴇ ᴄʟᴇᴀʀᴇᴅ")
         
         # ===== 4. STOP PYTGCALLS =====
@@ -2690,7 +2712,7 @@ async def cmd_restart(client, message):
             logger.debug(f"ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
         
         # ===== 5. WAIT FOR CLEANUP =====
-        await asyncio.sleep(2)  # Increased wait time for proper cleanup
+        await asyncio.sleep(2)
         
         # ===== 6. RESTART PYTGCALLS =====
         restart_success = False
@@ -2698,34 +2720,60 @@ async def cmd_restart(client, message):
             # Create new PyTgCalls instance
             call_py = PyTgCalls(user_app)
             
-            # Re-register the microphone stream handler
+            # ✅ FIX: Properly re-register the microphone stream handler
             @call_py.on_update(pytg_filters.stream_frame(Direction.INCOMING, Device.MICROPHONE))
             async def audio_forwarder_handler(_, update: StreamFrames):
                 """registered audio handler"""
                 await _forward_incoming_frames(update)
+            
             # Start PyTgCalls
             await call_py.start()
+            logger.info("🔄 ᴘʏᴛɢᴄᴀʟʟꜱ ʀᴇꜱᴛᴀʀᴛᴇᴅ")
 
-            # Rejoin source + forward chats after restart (no data loss)
+            # ✅ FIX: Rejoin source first
             if was_recording:
-                ok, _ = await join_call_safe(RECORD_SOURCE)
+                ok, error = await join_call_safe(RECORD_SOURCE)
                 if ok:
                     await call_py.record(RECORD_SOURCE, RecordStream(True, AUDIO_PARAMETERS))
                     is_recording = True
+                    logger.info(f"✅ ʀᴇꜱᴛᴀʀᴛᴇᴅ ʀᴇᴄᴏʀᴅɪɴɢ ꜰʀᴏᴍ {RECORD_SOURCE}")
+                else:
+                    is_recording = False
+                    logger.error(f"❌ ꜰᴀɪʟᴇᴅ ᴛᴏ ʀᴇꜱᴛᴀʀᴛ ʀᴇᴄᴏʀᴅɪɴɢ: {error}")
+            
+            # ✅ FIX: Rejoin all forward chats
+            rejoined_count = 0
             for _cid in saved_forwards:
                 try:
-                    ok, _ = await join_call_safe(_cid)
-                    if not ok:
-                        forward_chats.discard(_cid)
-                except Exception:
-                    forward_chats.discard(_cid)
+                    ok, error = await join_call_safe(_cid)
+                    if ok:
+                        forward_chats.add(_cid)
+                        rejoined_count += 1
+                        logger.info(f"✅ ʀᴇᴊᴏɪɴᴇᴅ ꜰᴏʀᴡᴀʀᴅ ᴄʜᴀᴛ: {_cid}")
+                    else:
+                        logger.error(f"❌ ꜰᴀɪʟᴇᴅ ᴛᴏ ʀᴇᴊᴏɪɴ {_cid}: {error}")
+                except Exception as e:
+                    logger.error(f"❌ ᴇʀʀᴏʀ ʀᴇᴊᴏɪɴɪɴɢ {_cid}: {e}")
+            
+            # ✅ FIX: Restore mute state if it was muted before
+            if was_muted and forward_chats:
+                paused = 0
+                for chat_id in list(forward_chats):
+                    try:
+                        await call_py.pause_stream(chat_id)
+                        paused += 1
+                    except Exception:
+                        pass
+                if paused:
+                    is_muted = True
+                    logger.info(f"🔇 ʀᴇꜱᴛᴏʀᴇᴅ ᴍᴜᴛᴇ ꜰᴏʀ {paused} ᴄʜᴀᴛꜱ")
+            
             save_state()
-
             restart_success = True
-            logger.info("🔄 ᴘʏᴛɢᴄᴀʟʟꜱ ʀᴇꜱᴛᴀʀᴛᴇᴅ")
+            logger.info(f"🔄 ʀᴇꜱᴛᴀʀᴛ ᴄᴏᴍᴘʟᴇᴛᴇ: ʀᴇᴄᴏʀᴅɪɴɢ={is_recording}, ꜰᴏʀᴡᴀʀᴅꜱ={len(forward_chats)}, ᴍᴜᴛᴇ={is_muted}")
             
         except Exception as e:
-            logger.error(f"ᴀꜰᴛᴇʀ ʀᴇꜱᴛᴀʀᴛ ᴘʏᴛɢᴄᴀʟʟꜱ ꜰᴀɪʟᴇᴅ: {e}")
+            logger.error(f"ʀᴇꜱᴛᴀʀᴛ ᴘʏᴛɢᴄᴀʟʟꜱ ꜰᴀɪʟᴇᴅ: {e}")
             restart_success = False
         
         # ===== 7. UPDATE STATUS =====
@@ -2750,7 +2798,7 @@ async def cmd_restart(client, message):
                 f"💡 ᴍᴀɴᴜᴀʟʟʏ ᴄʜᴇᴄᴋ ᴛʜᴇ ʙᴏᴛ ꜱᴛᴀᴛᴜꜱ"
             )
         
-        logger.info("✅ ʀᴇꜱᴛᴀʀᴛ ᴄᴏᴍᴘʟᴇᴛᴇ")
+        logger.info("✅ ʀᴇꜱᴛᴀʀᴛ ᴄᴏᴍᴍᴀɴᴅ ᴄᴏᴍᴘʟᴇᴛᴇᴅ")
         
     except Exception as e:
         logger.error(f"ʀᴇꜱᴛᴀʀᴛ ᴇʀʀᴏʀ: {e}")
@@ -2763,8 +2811,7 @@ async def cmd_restart(client, message):
         except Exception:
             logger.error("ᴄᴏᴜʟᴅ ɴᴏᴛ ꜱᴇɴᴅ ᴇʀʀᴏʀ ᴍᴇꜱꜱᴀɢᴇ")
 
-# ==================== ʀᴇꜱᴛᴀʀᴛ ᴄᴏᴍᴍᴀɴᴅ ᴇɴᴅꜱ ====================        
-
+# ==================== ʀᴇꜱᴛᴀʀᴛ ᴄᴏᴍᴍᴀɴᴅ ᴇɴᴅꜱ ====================
 
 
 # ==================== ᴘᴀɴᴇʟ ᴄᴏᴍᴍᴀɴᴅ ====================
@@ -2867,7 +2914,6 @@ async def panel_callbacks(client, callback_query: CallbackQuery):
             await callback_query.answer("🔇 ᴀʟʀᴇᴀᴅʏ ᴍᴜᴛᴇᴅ!", show_alert=True)
             return
         
-        # 🔥 Sirf forward chats ko pause karo (Source ko mat chhedo)
         paused_count = 0
         for chat_id in list(forward_chats):
             try:
@@ -2886,7 +2932,6 @@ async def panel_callbacks(client, callback_query: CallbackQuery):
             await callback_query.answer("🔊 ᴀʟʀᴇᴀᴅʏ ᴜɴᴍᴜᴛᴇᴅ!", show_alert=True)
             return
         
-        # 🔥 Sirf forward chats ko resume karo (Source ko mat chhedo)
         resumed_count = 0
         for chat_id in list(forward_chats):
             try:
@@ -2953,9 +2998,10 @@ async def panel_callbacks(client, callback_query: CallbackQuery):
         await callback_query.answer(f"📈 ɢᴀɪɴ: {audio_config['gain']}/60", show_alert=True)
         await refresh_panel(client, callback_query)
     
-    # ===== PANEL RESET =====
+    # ===== PANEL RESET (FIXED) =====
     elif data == "panel_reset":
-        audio_config = {
+        # ✅ FIX: Use .update() instead of reassigning
+        audio_config.update({
             'volume': 100,
             'bass': 0,
             'treble': 0,
@@ -2964,7 +3010,7 @@ async def panel_callbacks(client, callback_query: CallbackQuery):
             'limiter': True,
             'highpass': False,
             'lowpass': False
-        }
+        })
         save_state()
         await callback_query.answer("🔄 ᴀʟʟ ᴇꜰꜰᴇᴄᴛꜱ ʀᴇꜱᴇᴛ!", show_alert=True)
         await refresh_panel(client, callback_query)
@@ -3192,6 +3238,10 @@ if __name__ == "__main__":
     asyncio.set_event_loop(loop)
     try:
         loop.run_until_complete(_main_run())
+    except KeyboardInterrupt:
+        print("\n🛑 ꜱʜᴜᴛᴛɪɴɢ ᴅᴏᴡɴ...")
+    except Exception as e:
+        print(f"❌ ᴇʀʀᴏʀ: {e}")
     finally:
         try:
             loop.close()
