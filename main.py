@@ -3145,15 +3145,16 @@ async def refresh_panel(client, callback_query: CallbackQuery):
 # ==================== MAIN ====================
 
 if __name__ == "__main__":
-    # ===== FIX 1: Patch Pyrogram to handle invalid peer errors =====
+    # ===== FIX: Patch Pyrogram to handle invalid peer errors =====
     from pyrogram.client import Client
     from pyrogram.errors import PeerIdInvalid
     
     _original_handle_updates = Client.handle_updates
     
-    async def _safe_handle_updates(self, update, users, chats):
+    async def _safe_handle_updates(self, update):
+        """Safe wrapper for handle_updates that ignores invalid peer errors"""
         try:
-            await _original_handle_updates(self, update, users, chats)
+            await _original_handle_updates(self, update)
         except (ValueError, KeyError, PeerIdInvalid) as e:
             error_msg = str(e)
             if "ID not found" in error_msg or "invalid" in error_msg.lower():
@@ -3169,7 +3170,7 @@ if __name__ == "__main__":
     
     Client.handle_updates = _safe_handle_updates
     logger.info("✅ Applied safe peer resolution patch")
-    # ===== END FIX 1 =====
+    # ===== END FIX =====
     
     # Load initial state
     load_state()
@@ -3202,7 +3203,7 @@ if __name__ == "__main__":
                 print(f"⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛ ꜰᴀɪʟᴇᴅ (User session error): {e}")
                 print("   ʙᴏᴛ ᴡɪʟʟ ꜱᴛɪʟʟ ʀᴜɴ ꜰᴏʀ ʙᴏᴛ ᴄᴏᴍᴍᴀɴᴅꜱ!\n")
         
-            # ===== FIX 2: Validate and clean invalid forward chats on startup =====
+            # ===== FIX: Validate and clean invalid forward chats on startup =====
             invalid_chats = []
             for chat_id in list(forward_chats):
                 try:
@@ -3219,7 +3220,7 @@ if __name__ == "__main__":
             if invalid_chats:
                 save_state()
                 logger.info(f"✅ Removed {len(invalid_chats)} invalid chats from forward list")
-            # ===== END FIX 2 =====
+            # ===== END FIX =====
         
             # Print help/status
             print("\n✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
