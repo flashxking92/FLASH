@@ -3145,33 +3145,6 @@ async def refresh_panel(client, callback_query: CallbackQuery):
 # ==================== MAIN ====================
 
 if __name__ == "__main__":
-    # ===== FIX: Patch Pyrogram to handle invalid peer errors =====
-    from pyrogram.client import Client
-    from pyrogram.errors import PeerIdInvalid
-    
-    _original_handle_updates = Client.handle_updates
-    
-    async def _safe_handle_updates(self, update):
-        """Safe wrapper for handle_updates that ignores invalid peer errors"""
-        try:
-            await _original_handle_updates(self, update)
-        except (ValueError, KeyError, PeerIdInvalid) as e:
-            error_msg = str(e)
-            if "ID not found" in error_msg or "invalid" in error_msg.lower():
-                import re
-                match = re.search(r'[-]?\d+', error_msg)
-                if match:
-                    chat_id = match.group()
-                    logger.debug(f"Ignored update from unknown peer: {chat_id}")
-                else:
-                    logger.debug(f"Ignored unknown peer update: {e}")
-            else:
-                raise
-    
-    Client.handle_updates = _safe_handle_updates
-    logger.info("✅ Applied safe peer resolution patch")
-    # ===== END FIX =====
-    
     # Load initial state
     load_state()
     
@@ -3189,107 +3162,101 @@ if __name__ == "__main__":
         print("⚠️ ꜱᴄɪᴘʏ ɴᴏᴛ ᴀᴠᴀɪʟᴀʙʟᴇ - ʙᴀꜱɪᴄ ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ ᴏɴʟʏ")
         print("   ɪɴꜱᴛᴀʟʟ ᴡɪᴛʜ: ᴘɪᴘ ɪɴꜱᴛᴀʟʟ ꜱᴄɪᴘʏ\n")
     
-    async def _main_run():
-        try:
-            # Start bot
-            await bot_app.start()
-            print("✅ ʙᴏᴛ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
-        
-            # Start PyTgCalls (with fallback)
-            try:
-                await call_py.start()
-                print("✅ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
-            except Exception as e:
-                print(f"⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛ ꜰᴀɪʟᴇᴅ (User session error): {e}")
-                print("   ʙᴏᴛ ᴡɪʟʟ ꜱᴛɪʟʟ ʀᴜɴ ꜰᴏʀ ʙᴏᴛ ᴄᴏᴍᴍᴀɴᴅꜱ!\n")
-        
-            # ===== FIX: Validate and clean invalid forward chats on startup =====
-            invalid_chats = []
-            for chat_id in list(forward_chats):
-                try:
-                    chat = await user_app.get_chat(chat_id)
-                    logger.info(f"✅ Valid chat: {chat_id} - {chat.title if hasattr(chat, 'title') else 'Private'}")
-                except Exception as e:
-                    logger.warning(f"❌ Invalid chat {chat_id}: {e}")
-                    invalid_chats.append(chat_id)
-            
-            for chat_id in invalid_chats:
-                forward_chats.discard(chat_id)
-                logger.info(f"🗑️ Removed invalid chat: {chat_id}")
-            
-            if invalid_chats:
-                save_state()
-                logger.info(f"✅ Removed {len(invalid_chats)} invalid chats from forward list")
-            # ===== END FIX =====
-        
-            # Print help/status
-            print("\n✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
-            print("📌 ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ")
-            print("📌 ᴀᴜᴅɪᴏ ᴄᴏᴍᴍᴀɴᴅꜱ: /ʟᴇᴠᴇʟ, /ʙᴀꜱꜱ, /ᴛʀᴇʙʟᴇ, /ɢᴀɪɴ, /ᴇꜰꜰᴇᴄᴛꜱ")
-            print("📌 ᴇxᴛʀᴀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ, /ꜱᴛᴀᴛᴜꜱ")
-            print("⚠️ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ ɢᴇᴛ ɴᴏ ʀᴇꜱᴘᴏɴꜱᴇ (ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ)\n")
-        
-            # Idle (blocks until interrupted)
-            await idle()
-        
-        except KeyboardInterrupt:
-            print("\n🛑 ꜱʜᴜᴛᴛɪɴɢ ᴅᴏᴡɴ...")
-        except Exception as e:
-            print(f"❌ ꜰᴀᴛᴀʟ ᴇʀʀᴏʀ: {e}")
-            import traceback
-            traceback.print_exc()
-        finally:
-            # ==================== CLEANUP ====================
-            print("\n🧹 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ...")
-        
-            # Leave all forward chats
-            for chat in list(forward_chats):
-                try:
-                    await call_py.leave_call(chat)
-                    print(f"    ʟᴇꜰᴛ ᴄʜᴀᴛ: {chat}")
-                except Exception as e:
-                    print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ {chat}: {e}")
-        
-            # Leave source chat
-            try:
-                await call_py.leave_call(RECORD_SOURCE)
-                print(f"    ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}")
-            except Exception as e:
-                print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ: {e}")
-        
-            # Stop PyTgCalls
-            try:
-                await call_py.stop()
-                print("    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘᴘᴇᴅ")
-            except Exception as e:
-                print(f"    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
-        
-            # Stop bot
-            try:
-                await bot_app.stop()
-                print("    ʙᴏᴛ ꜱᴛᴏᴘᴘᴇᴅ")
-            except Exception as e:
-                print(f"    ʙᴏᴛ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
-        
-            # Save state
-            try:
-                save_state()
-                print("    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
-            except Exception as e:
-                print(f"    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇ ᴇʀʀᴏʀ: {e}")
-        
-            print("✅ ᴄʟᴇᴀɴᴜᴘ ᴄᴏᴍᴘʟᴇᴛᴇ")
-
-    loop = asyncio.new_event_loop()
-    asyncio.set_event_loop(loop)
     try:
-        loop.run_until_complete(_main_run())
+        # Start bot
+        bot_app.start()
+        print("✅ ʙᴏᴛ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
+        
+        # Start PyTgCalls (with fallback)
+        try:
+            call_py.start()
+            print("✅ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
+        except Exception as e:
+            print(f"⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛ ꜰᴀɪʟᴇᴅ (User session error): {e}")
+            print("   ʙᴏᴛ ᴡɪʟʟ ꜱᴛɪʟʟ ʀᴜɴ ꜰᴏʀ ʙᴏᴛ ᴄᴏᴍᴍᴀɴᴅꜱ!\n")
+        
+        # Print help/status
+        print("\n✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
+        print("📌 ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ")
+        print("📌 ᴀᴜᴅɪᴏ ᴄᴏᴍᴍᴀɴᴅꜱ: /ʟᴇᴠᴇʟ, /ʙᴀꜱꜱ, /ᴛʀᴇʙʟᴇ, /ɢᴀɪɴ, /ᴇꜰꜰᴇᴄᴛꜱ")
+        print("📌 ᴇxᴛʀᴀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ")
+        print("📌 ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ: /screenshare on, /screenshare off")
+        print("⚠️ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ ɢᴇᴛ ɴᴏ ʀᴇꜱᴘᴏɴꜱᴇ (ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ)\n")
+        
+        # Idle (blocks until interrupted)
+        idle()
+        
     except KeyboardInterrupt:
         print("\n🛑 ꜱʜᴜᴛᴛɪɴɢ ᴅᴏᴡɴ...")
     except Exception as e:
-        print(f"❌ ᴇʀʀᴏʀ: {e}")
+        print(f"❌ ꜰᴀᴛᴀʟ ᴇʀʀᴏʀ: {e}")
+        import traceback
+        traceback.print_exc()
     finally:
+        # ==================== CLEANUP ====================
+        print("\n🧹 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ...")
+        
+        # Stop all active screenshares
+        for ss_chat in list(screen_shares.keys()):
+            try:
+                info = screen_shares[ss_chat]
+                info["_closing"] = True
+                proc = info.get("process")
+                task = info.get("task")
+                # Cancel task first
+                if task and not task.done():
+                    task.cancel()
+                # Kill ffmpeg
+                if proc and proc.poll() is None:
+                    proc.terminate()
+                    try:
+                        proc.wait(timeout=2)
+                    except subprocess.TimeoutExpired:
+                        proc.kill()
+                # Leave call
+                try:
+                    call_py.leave_call(ss_chat)
+                except Exception:
+                    pass
+                print(f"    ꜱᴛᴏᴘᴘᴇᴅ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ: {ss_chat}")
+            except Exception as e:
+                print(f"    ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴄʟᴇᴀɴᴜᴘ ᴇʀʀᴏʀ {ss_chat}: {e}")
+        screen_shares.clear()
+        
+        # Leave all forward chats
+        for chat in list(forward_chats):
+            try:
+                call_py.leave_call(chat)
+                print(f"    ʟᴇꜰᴛ ᴄʜᴀᴛ: {chat}")
+            except Exception as e:
+                print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ {chat}: {e}")
+        
+        # Leave source chat
         try:
-            loop.close()
-        except Exception:
-            pass
+            call_py.leave_call(RECORD_SOURCE)
+            print(f"    ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}")
+        except Exception as e:
+            print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ: {e}")
+        
+        # Stop PyTgCalls
+        try:
+            call_py.stop()
+            print("    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘᴘᴇᴅ")
+        except Exception as e:
+            print(f"    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
+        
+        # Stop bot
+        try:
+            bot_app.stop()
+            print("    ʙᴏᴛ ꜱᴛᴏᴘᴘᴇᴅ")
+        except Exception as e:
+            print(f"    ʙᴏᴛ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
+        
+        # Save state
+        try:
+            save_state()
+            print("    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
+        except Exception as e:
+            print(f"    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇ ᴇʀʀᴏ��: {e}")
+        
+        print("✅ ᴄʟᴇᴀɴᴜᴘ ᴄᴏᴍᴘʟᴇᴛᴇ")
