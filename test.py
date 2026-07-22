@@ -45,8 +45,7 @@ from pytgcalls.types import (
     ExternalMedia,
     MediaStream,
     RecordStream,
-    StreamFrames,
-    VideoParameters,
+    StreamFrames
 )
 from pytgcalls.types.raw import AudioParameters
 from pytgcalls.exceptions import NoActiveGroupCall
@@ -57,7 +56,7 @@ from pytgcalls.exceptions import NoActiveGroupCall
 API_ID = 38756298
 API_HASH = "7acf851e8e2533ab5a02c6b9755f1d69"
 BOT_TOKEN = "8901346149:AAFo8_Mt55HVvRuKyZqueEBDS2ZA1j5--bg"
-OWNER_IDS = {8305984975, 8395285719}
+OWNER_ID = {8305984975, 8395285719}
 STRING_SESSION = "BQJPX8oAPpN8FWSRQCUIo3ULaiV_9Hyi-X-cKpn710b7nGNqHiHcfC1OA9g7bZaXklI75KLdlMwIv7AZ3XpV1gpRW5tmU6JWmndj1fC5hK-kxAeB4tR5AubFmKVj4g7gWLaLm9tkgo8gTGHuEfRk5_RySMICCUJfnegO4Y2W65nCBk5G8OKh4D3ppCkuUnV2Txm7YD8Qm2CGX6m9orXu8f4aGsSsywlxEdEDooES4PYF9plXh3YkMERiQbNoBK6Wlnw-jbOQFLtsJUsKGJvDBc3Dc57SYjWUlkj5OhF4BAdnrJ_52EuFftFW4zqdlNV7si6DnZ3zBhMMtRCK3FcXW_mGgnTVSAAAAAFq1aUDAA"
 RECORD_GROUP = -1004345811603
 # ======================================================
@@ -71,39 +70,6 @@ logging.getLogger("pytgcalls").setLevel(logging.WARNING)
 
 AUDIO_PARAMETERS = AudioParameters(bitrate=48000, channels=2)
 
-# ==================== ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ / ᴠɪᴅᴇᴏ ᴄᴏɴꜰɪɢ ====================
-# SCREENSHARE_SOURCE: any ffmpeg-readable input for the video track:
-#   - Test pattern (default):  "testsrc=size=1280x720:rate=30"  (needs lavfi)
-#   - Looping video file:      "/path/to/screen.mp4"
-#   - HTTP(S) stream URL:       "https://.../stream.m3u8"
-# Set SCREENSHARE_FFMPEG to "-f lavfi" ONLY when SCREENSHARE_SOURCE is a lavfi
-# virtual input (like testsrc); leave it "" for real files/URLs.
-SCREENSHARE_SOURCE = "testsrc=size=1280x720:rate=30"
-SCREENSHARE_FFMPEG = "-f lavfi"
-VIDEO_PARAMETERS = VideoParameters(1280, 720, 30)
-
-
-def build_audio_stream():
-    """Audio-only stream used by /join and when screenshare is turned off."""
-    return MediaStream(ExternalMedia.AUDIO, AUDIO_PARAMETERS)
-
-
-def build_screenshare_stream():
-    """Video (screenshare) stream built from SCREENSHARE_SOURCE.
-
-    NOTE: pytgcalls cannot mix an ExternalMedia (send_frame) audio track with an
-    ffmpeg video track in the same stream. While screenshare is ON for a chat,
-    that chat plays SCREENSHARE_SOURCE's own audio+video; live audio forwarding
-    for that chat resumes automatically when screenshare is turned OFF.
-    """
-    kwargs = {
-        "audio_parameters": AUDIO_PARAMETERS,
-        "video_parameters": VIDEO_PARAMETERS,
-    }
-    if SCREENSHARE_FFMPEG:
-        kwargs["ffmpeg_parameters"] = SCREENSHARE_FFMPEG
-    return MediaStream(SCREENSHARE_SOURCE, **kwargs)
-
 # ==================== ᴄʟɪᴇɴᴛꜱ ====================
 bot_app = Client("bot_session_v5", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 user_app = Client("user_session_v5", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
@@ -111,8 +77,6 @@ call_py = PyTgCalls(user_app)
 
 # ==================== ꜱᴛᴀᴛᴇ ====================
 forward_chats = set()
-screen_shares = set()  # chat_ids currently receiving the screenshare video track
-screenshare_enabled = False  # global screenshare toggle (also applied to new joins)
 is_muted = False
 is_recording = False
 RECORD_SOURCE = RECORD_GROUP
@@ -152,7 +116,6 @@ def save_state():
                 "forward_chats": sorted(forward_chats),
                 "auto_mute_enabled": auto_mute_enabled,
                 "is_muted": is_muted,
-                "screenshare_enabled": screenshare_enabled,
             }, f, indent=2)
         os.replace(tmp, STATE_FILE)
     except Exception as e:
@@ -160,7 +123,7 @@ def save_state():
 
 def load_state():
     """ʟᴏᴀᴅ ᴘᴇʀꜱɪꜱᴛᴇᴅ ꜱᴛᴀᴛᴇ ɪꜰ ᴀᴠᴀɪʟᴀʙʟᴇ"""
-    global RECORD_SOURCE, auto_mute_enabled, is_muted, screenshare_enabled
+    global RECORD_SOURCE, auto_mute_enabled, is_muted
     
     try:
         with open(STATE_FILE, "r") as f:
@@ -182,7 +145,6 @@ def load_state():
         
         auto_mute_enabled = data.get("auto_mute_enabled", False)
         is_muted = data.get("is_muted", False)
-        screenshare_enabled = data.get("screenshare_enabled", False)
         
         logger.info(f"ʟᴏᴀᴅᴇᴅ ꜱᴛᴀᴛᴇ: {len(approved_users)} ᴀᴘᴘʀᴏᴠᴇᴅ ᴜꜱᴇʀ(ꜱ), ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}, ᴍᴜᴛᴇᴅ: {is_muted}")
     except FileNotFoundError:
@@ -552,7 +514,6 @@ async def _forward_incoming_frames(update):
                     logger.debug(f"ꜱᴇɴᴅ ᴇʀʀᴏʀ ᴛᴏ {chat_id}: {e}")
                     if "not found" in str(e).lower() or "invalid" in str(e).lower():
                         forward_chats.discard(chat_id)
-                        screen_shares.discard(chat_id)
                         logger.warning(f"ʀᴇᴍᴏᴠᴇᴅ {chat_id} ꜰʀᴏᴍ ꜰᴏʀᴡᴀʀᴅɪɴɢ ʟɪꜱᴛ")
         except Exception as e:
             logger.error(f"ᴀᴜᴅɪᴏ ʜᴀɴᴅʟᴇʀ ᴇʀʀᴏʀ: {e}")
@@ -594,11 +555,10 @@ async def join_call_safe(chat_id):
         if not await cache_chat_info(chat_id):
             return False, "ᴄʜᴀᴛ ɴᴏᴛ ꜰᴏᴜɴᴅ ᴏʀ ɪɴᴀᴄᴄᴇꜱꜱɪʙʟᴇ"
         try:
-            if screenshare_enabled:
-                await call_py.play(chat_id, build_screenshare_stream())
-                screen_shares.add(chat_id)
-            else:
-                await call_py.play(chat_id, build_audio_stream())
+            await call_py.play(
+                chat_id,
+                MediaStream(ExternalMedia.AUDIO, AUDIO_PARAMETERS),
+            )
             return True, None
         except NoActiveGroupCall:
             return False, "ɴᴏ ᴀᴄᴛɪᴠᴇ ᴠᴏɪᴄᴇ ᴄʜᴀᴛ"
@@ -1056,7 +1016,6 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
 /leave <ɪᴅ> - ꜱᴛᴏᴘ ꜰᴏʀᴡᴀʀᴅɪɴɢ
 /leaveall - ꜱᴛᴏᴘ ᴀʟʟ
 /leaverecord - ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ
-/screenshare on/off - ᴠɪᴅᴇᴏ ꜱʜᴀʀᴇ
 
 /mute - ᴍᴜᴛᴇ
 /unmute - ᴜɴᴍᴜᴛᴇ
@@ -1254,7 +1213,6 @@ async def cmd_help(client, message):
 /leave <ɪᴅ> - ꜱᴛᴏᴘ ꜰᴏʀᴡᴀʀᴅɪɴɢ
 /leaveall - ꜱᴛᴏᴘ ᴀʟʟ
 /leaverecord - ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ
-/screenshare on/off - ᴠɪᴅᴇᴏ ꜱʜᴀʀᴇ
 /mute - ᴍᴜᴛᴇ
 /unmute - ᴜɴᴍᴜᴛᴇ
 ────────────────────
@@ -1463,7 +1421,7 @@ async def cmd_join(client, message):
             )
     except ValueError:
         await message.reply(
-            f"❌ **ɪɴᴠᴀʟɪᴅ ��ʜᴀᴛ ɪᴅ ꜰᴏʀᴍᴀᴛ!**\n\n"
+            f"❌ **ɪɴᴠᴀʟɪᴅ ᴄʜᴀᴛ ɪᴅ ꜰᴏʀᴍᴀᴛ!**\n\n"
             f"📌 **ʏᴏᴜ ᴇɴᴛᴇʀᴇᴅ:** `{parts[1]}`\n"
             f"💡 ᴜꜱᴇ ᴀ ɴᴜᴍᴇʀɪᴄ ɪᴅ (ᴇ.ɢ., `-1003929100976`)"
         )
@@ -1531,7 +1489,6 @@ async def cmd_rejoin(client, message):
     
     if forward_list:
         # Leave all forward chats
-        screen_shares.clear()  # video track won't survive the leave/rejoin
         for chat_id in forward_list:
             try:
                 await call_py.leave_call(chat_id)
@@ -1560,7 +1517,7 @@ async def cmd_rejoin(client, message):
                 logger.error(f"ᴇʀʀᴏʀ ʀᴇᴊᴏɪɴɪɴɢ {chat_id}: {e}")
     else:
         rejoin_results["forwards"]["status"] = "⏸️"
-        rejoin_results["forwards"]["error"] = "ɴᴏ ꜰᴏʀᴡᴀʀᴅ ᴄ��ᴀᴛꜱ"
+        rejoin_results["forwards"]["error"] = "ɴᴏ ꜰᴏʀᴡᴀʀᴅ ᴄʜᴀᴛꜱ"
     
     # ===== FIX 2: PROPERLY RESTORE MUTE STATUS AFTER REJOIN =====
     if was_muted and forward_chats:
@@ -1685,7 +1642,6 @@ async def cmd_leave(client, message):
             status_msg = await message.reply(f"🔄 **ʟᴇᴀᴠɪɴɢ `{chat_id}`...**")
             await call_py.leave_call(chat_id)
             forward_chats.discard(chat_id)
-            screen_shares.discard(chat_id)
             save_state()
             leave_msg = f"""
 ✅ **ʟᴇꜰᴛ ᴄʜᴀᴛ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**
@@ -1719,7 +1675,6 @@ async def cmd_leave(client, message):
             except Exception:
                 pass
         forward_chats.clear()
-        screen_shares.clear()
         save_state()
         leave_msg = f"""
 ✅ **ʟᴇꜰᴛ ᴀʟʟ ᴄʜᴀᴛꜱ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**
@@ -1755,7 +1710,6 @@ async def cmd_leaveall(client, message):
         except Exception:
             pass
     forward_chats.clear()
-    screen_shares.clear()
     save_state()
     leaveall_msg = f"""
 ✅ **ᴀʟʟ ᴄʜᴀᴛꜱ ᴅɪꜱᴄᴏɴɴᴇᴄᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**
@@ -1862,7 +1816,7 @@ async def cmd_joinlink(client, message):
 ────────────────────
 💡 **ɴᴇxᴛ ꜱᴛᴇᴘꜱ:**
 • ᴛᴏ ꜱᴛᴀʀᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ: `/ᴊᴏɪɴ {chat_id}`
-• ᴛᴏ ᴄʜᴇᴄᴋ ᴀʟʟ ꜰᴏʀᴡᴀʀᴅ���: `/ʟɪꜱᴛ`
+• ᴛᴏ ᴄʜᴇᴄᴋ ᴀʟʟ ꜰᴏʀᴡᴀʀᴅꜱ: `/ʟɪꜱᴛ`
 • ᴛᴏ ꜱᴛᴏᴘ ꜰᴏʀᴡᴀʀᴅɪɴɢ: `/ʟᴇᴀᴠᴇ {chat_id}`
 
 ────────────────────
@@ -2300,66 +2254,6 @@ async def cmd_automute(client, message):
     else:
         await message.reply("❌ **ɪɴᴠᴀʟɪᴅ!**\n\nᴜꜱᴇ `/automute on` ᴏʀ `/automute off`")
         
-
-# ===== ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴄᴏᴍᴍᴀɴᴅ =====
-
-@bot_app.on_message(pyro_filters.command("screenshare") & authorized_only())
-async def cmd_screenshare(client, message):
-    """ᴛᴜʀɴ ᴠɪᴅᴇᴏ (ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ) ᴏɴ/ᴏꜰꜰ ꜰᴏʀ ᴀʟʟ ꜰᴏʀᴡᴀʀᴅ ᴄʜᴀᴛꜱ"""
-    global screenshare_enabled
-    parts = message.text.split()
-
-    if len(parts) < 2 or parts[1].lower() not in ("on", "off"):
-        await message.reply(
-            f"🖥️ **ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ꜱᴛᴀᴛᴜꜱ:** {'🟢 ᴏɴ' if screenshare_enabled else '🔴 ᴏꜰꜰ'} "
-            f"({len(screen_shares)}/{len(forward_chats)} ᴄʜᴀᴛꜱ)\n\n"
-            "💡 `/screenshare on` - ꜱᴛᴀʀᴛ ᴠɪᴅᴇᴏ ᴏɴ ᴀʟʟ ꜰᴏʀᴡᴀʀᴅ ᴄʜᴀᴛꜱ\n"
-            "💡 `/screenshare off` - ꜱᴛᴏᴘ ᴠɪᴅᴇᴏ, ʙᴀᴄᴋ ᴛᴏ ᴀᴜᴅɪᴏ ᴏɴʟʏ"
-        )
-        return
-
-    mode = parts[1].lower()
-
-    if not forward_chats:
-        await message.reply(
-            "⚠️ **ɴᴏ ꜰᴏʀᴡᴀʀᴅ ᴄʜᴀᴛꜱ!**\n\nᴜꜱᴇ `/join <chat_id>` ꜰɪʀꜱᴛ."
-        )
-        return
-
-    status_msg = await message.reply(
-        f"🔄 **ᴛᴜʀɴɪɴɢ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ {mode.upper()}...**"
-    )
-
-    # Update the global toggle first so new /join calls inherit the state.
-    screenshare_enabled = (mode == "on")
-
-    success, failed = 0, 0
-    for chat_id in list(forward_chats):
-        try:
-            if mode == "on":
-                # Play the configured video source (SCREENSHARE_SOURCE) on the
-                # chat. See build_screenshare_stream() for the audio/video note.
-                await call_py.play(chat_id, build_screenshare_stream())
-                screen_shares.add(chat_id)
-            else:
-                # Drop back to the plain audio-only stream used by /join
-                await call_py.play(chat_id, build_audio_stream())
-                screen_shares.discard(chat_id)
-            success += 1
-        except Exception as e:
-            failed += 1
-            logger.debug(f"ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ {mode} ꜰᴀɪʟᴇᴅ ꜰᴏʀ {chat_id}: {e}")
-
-    save_state()
-
-    await status_msg.edit_text(
-        f"{'🟢' if mode == 'on' else '🔴'} **ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ {mode.upper()}!**\n\n"
-        f"✅ **ᴀᴘᴘʟɪᴇᴅ:** {success} ᴄʜᴀᴛꜱ\n"
-        f"❌ **ꜰᴀɪʟᴇᴅ:** {failed} ᴄʜᴀᴛꜱ\n"
-        f"📤 **ᴀᴄᴛɪᴠᴇ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇꜱ:** {len(screen_shares)}"
-    )
-    logger.info(f"ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ {mode}: {success} ᴏᴋ, {failed} ꜰᴀɪʟᴇᴅ")
-
 # ===== ᴇꜰꜰᴇᴄᴛꜱ ᴄᴏᴍᴍᴀɴᴅꜱ =====
 
 @bot_app.on_message(pyro_filters.command("level") & authorized_only())
@@ -2739,7 +2633,7 @@ async def cmd_setrecordgroup(client, message):
             else:
                 is_recording = False
                 await status_msg.edit_text(
-                    f"⚠️ **ꜱᴏᴜʀ���ᴇ ᴄʜᴀɴɢᴇᴅ ʙᴜᴛ ꜰᴀɪʟᴇᴅ ᴛᴏ ᴊᴏɪɴ!**\n\n"
+                    f"⚠️ **ꜱᴏᴜʀᴄᴇ ᴄʜᴀɴɢᴇᴅ ʙᴜᴛ ꜰᴀɪʟᴇᴅ ᴛᴏ ᴊᴏɪɴ!**\n\n"
                     f"📡 **ɴᴇᴡ ꜱᴏᴜʀᴄᴇ:** `{new_source}`\n"
                     f"⚠️ **ᴇʀʀᴏʀ:** `{error}`\n"
                     f"💡 ᴜꜱᴇ `/ʀᴇᴄᴏʀᴅ` ᴛᴏ ᴛʀʏ ᴀɢᴀɪɴ"
@@ -2807,7 +2701,6 @@ async def cmd_restart(client, message):
         is_recording = False
         is_muted = False  # ← NEW: Reset mute during restart
         forward_chats.clear()  # ← NEW: Clear forward chats during restart
-        screen_shares.clear()  # video track won't survive a restart
         logger.info("🧹 ʀᴜɴᴛɪᴍᴇ ꜱᴛᴀᴛᴇ ᴄʟᴇᴀʀᴇᴅ")
         
         # ===== 4. STOP PYTGCALLS =====
@@ -2955,7 +2848,7 @@ async def cmd_panel(client, message):
 🎵 **ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ**
 • **ᴠᴏʟᴜᴍᴇ:** `{audio_config['volume']}%` {vol_bar}
 • **ʙᴀꜱꜱ:** `{audio_config['bass']}/60` {bass_bar}
-• **ᴛ��ᴇʙʟᴇ:** `{audio_config['treble']}/60` {treble_bar}
+• **ᴛʀᴇʙʟᴇ:** `{audio_config['treble']}/60` {treble_bar}
 • **ɢᴀɪɴ:** `{audio_config['gain']}/60` {gain_bar}
 
 ────────────────────
@@ -3288,7 +3181,6 @@ if __name__ == "__main__":
         print("📌 ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ")
         print("📌 ᴀᴜᴅɪᴏ ᴄᴏᴍᴍᴀɴᴅꜱ: /ʟᴇᴠᴇʟ, /ʙᴀꜱꜱ, /ᴛʀᴇʙʟᴇ, /ɢᴀɪɴ, /ᴇꜰꜰᴇᴄᴛꜱ")
         print("📌 ᴇxᴛʀᴀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ, /panel")
-        print("📌 ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ: /screenshare on, /screenshare off")
         print("⚠️ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ ɢᴇᴛ ɴᴏ ʀᴇꜱᴘᴏɴꜱᴇ (ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ)\n")
         
         # Idle (blocks until interrupted)
