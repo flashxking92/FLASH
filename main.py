@@ -17,7 +17,6 @@ if hasattr(sys.stderr, "reconfigure"):
 import numpy as np
 import os
 import re
-from typing import Optional, Tuple, Dict
 import json
 import logging
 import asyncio
@@ -173,7 +172,7 @@ def escape_markdown(text):
     """Escape characters special to Pyrogram's legacy Markdown parser."""
     if not text:
         return ""
-    specials = "`*_["
+    specials = "\\`*_[]()~>#+-=|{}.!"
     return "".join("\\" + c if c in specials else c for c in text)
 
 def get_uptime():
@@ -227,9 +226,9 @@ def apply_volume_boost(audio_data, level):
     
     # ꜱᴍᴀʀᴛ ɢᴀɪɴ ᴍᴀᴘᴘɪɴɢ ꜰᴏʀ ᴍᴀx ʟᴏᴜᴅɴᴇꜱꜱ
     if level <= 100:
-        gain_factor = 0.5 + (level / 200.0)
+        gain_factor = 0.7 + (level / 150.0)
     else:
-        gain_factor = 1.5 + ((level - 100) * 0.15)
+        gain_factor = 2.5 + ((level - 100) * 0.25)
     
     processed = audio * gain_factor
     
@@ -276,8 +275,8 @@ def apply_bass_boost_advanced(audio_data, bass_level, sample_rate=48000):
     
     try:
         # ʜɪɢʜᴇʀ ꜰʀᴇQ = ᴛɪɢʜᴛᴇʀ ʙᴀꜱꜱ
-        f0 = 80 + (bass_level * 0.2)
-        Q = 0.7
+        f0 = 60 + (bass_level * 0.15)
+        Q = 0.5
         gain_db = bass_level / 4
         
         w0 = 2 * np.pi * f0 / sample_rate
@@ -299,7 +298,7 @@ def apply_bass_boost_advanced(audio_data, bass_level, sample_rate=48000):
         filtered = signal.lfilter(b, a, audio_data.astype(np.float32))
         
         # ʀᴇᴍᴏᴠᴇ ꜱᴜʙ-ʙᴀꜱꜱ (ɴᴏ ꜰᴀᴛ)
-        if bass_level > 10:
+        if bass_level > 15:
             b_hp, a_hp = signal.butter(2, 40 / (sample_rate / 2), btype='high')
             filtered = signal.lfilter(b_hp, a_hp, filtered)
         
@@ -341,8 +340,8 @@ def apply_treble_boost_advanced(audio_data, treble_level, sample_rate=48000):
     if treble_level == 0:
         return audio_data
     try:
-        f0 = 3500
-        Q = 0.4
+        f0 = 3200
+        Q = 0.3
         gain_db = treble_level / 5
         w0 = 2 * np.pi * f0 / sample_rate
         A = 10 ** (gain_db / 40)
@@ -371,14 +370,14 @@ def apply_soft_gain(audio_data, gain_level):
     audio = audio_data.astype(np.float32)
     
     # === ꜱᴛᴀɢᴇ 1: ɪɴᴛᴇʟʟɪɢᴇɴᴛ ᴍᴀᴋᴇᴜᴘ ɢᴀɪɴ ===
-    gain_factor = 2.0 + (gain_level / 35.0)
+    gain_factor = 2.5 + (gain_level / 30.0)
     processed = audio * gain_factor
     
     # === ꜱᴛᴀɢᴇ 2: ᴘʀᴏ ꜱᴏꜰᴛ-ᴋɴᴇᴇ ᴄᴏᴍᴘʀᴇꜱꜱᴏʀ ===
     if audio_config.get("compressor", True):
-        threshold = 16000.0 + (gain_level * 40)
-        ratio = 3.0 + (gain_level / 30.0)
-        knee = 3000.0
+        threshold = 14000.0 + (gain_level * 40)
+        ratio = 4.0 + (gain_level / 30.0)
+        knee = 2500.0
         
         abs_processed = np.abs(processed)
         above = abs_processed > (threshold - knee/2)
@@ -397,7 +396,7 @@ def apply_soft_gain(audio_data, gain_level):
                 y = threshold + (x - threshold) / ratio
                 processed[above_knee] = np.sign(processed[above_knee]) * y
         
-        makeup = 1.4 + (gain_level / 50.0)
+        makeup = 1.6 + (gain_level / 50.0)
         processed = processed * makeup
     
     # === ꜱᴛᴀɢᴇ 3: ᴛʀᴜᴇ ᴘᴇᴀᴋ ʟɪᴍɪᴛᴇʀ ===
@@ -1388,12 +1387,14 @@ async def cmd_join(client, message):
             forward_chats.add(chat_id)
             
             # 🔥 AUTO-MUTE CHECK - NAYA JOIN AUTO MUTE
+            # NOTE: only mutes THIS new chat in real time via Telegram's own
+            # mute state — it must NOT touch the global is_muted flag, since
+            # that flag silences forwarding to every chat, not just this one.
             if auto_mute_enabled:
                 try:
-                    await call_py.pause_stream(chat_id)
-                    is_muted = True
-                except Exception:
-                    pass
+                    await call_py.mute(chat_id)
+                except Exception as e:
+                    logger.debug(f"ᴀᴜᴛᴏ-ᴍᴜᴛᴇ ꜰᴀɪʟᴇᴅ ꜰᴏʀ {chat_id}: {e}")
             
             save_state()
             join_msg = f"""
@@ -1524,7 +1525,7 @@ async def cmd_rejoin(client, message):
         paused = 0
         for chat_id in list(forward_chats):
             try:
-                await call_py.pause_stream(chat_id)
+                await call_py.mute(chat_id)
                 paused += 1
             except Exception:
                 pass
@@ -1536,7 +1537,7 @@ async def cmd_rejoin(client, message):
         resumed = 0
         for chat_id in list(forward_chats):
             try:
-                await call_py.resume_stream(chat_id)
+                await call_py.unmute(chat_id)
                 resumed += 1
             except Exception:
                 pass
@@ -2123,7 +2124,7 @@ async def cmd_mute(client, message):
     paused_count = 0
     for chat_id in list(forward_chats):
         try:
-            await call_py.pause_stream(chat_id)
+            await call_py.mute(chat_id)
             paused_count += 1
         except Exception as e:
             logger.debug(f"ᴄᴏᴜʟᴅ ɴᴏᴛ ᴘᴀᴜꜱᴇ {chat_id}: {e}")
@@ -2165,7 +2166,7 @@ async def cmd_unmute(client, message):
     resumed_count = 0
     for chat_id in list(forward_chats):
         try:
-            await call_py.resume_stream(chat_id)
+            await call_py.unmute(chat_id)
             resumed_count += 1
         except Exception as e:
             logger.debug(f"ᴄᴏᴜʟᴅ ɴᴏᴛ ʀᴇꜱᴜᴍᴇ {chat_id}: {e}")
@@ -2235,7 +2236,7 @@ async def cmd_automute(client, message):
         if forward_chats:
             for chat_id in list(forward_chats):
                 try:
-                    await call_py.resume_stream(chat_id)
+                    await call_py.unmute(chat_id)
                     unmuted_count += 1
                 except Exception:
                     pass
@@ -2760,7 +2761,7 @@ async def cmd_restart(client, message):
                 paused = 0
                 for chat_id in list(forward_chats):
                     try:
-                        await call_py.pause_stream(chat_id)
+                        await call_py.mute(chat_id)
                         paused += 1
                     except Exception:
                         pass
@@ -2917,7 +2918,7 @@ async def panel_callbacks(client, callback_query: CallbackQuery):
         paused_count = 0
         for chat_id in list(forward_chats):
             try:
-                await call_py.pause_stream(chat_id)
+                await call_py.mute(chat_id)
                 paused_count += 1
             except Exception as e:
                 logger.debug(f"ᴄᴏᴜʟᴅ ɴᴏᴛ ᴘᴀᴜꜱᴇ {chat_id}: {e}")
@@ -2935,7 +2936,7 @@ async def panel_callbacks(client, callback_query: CallbackQuery):
         resumed_count = 0
         for chat_id in list(forward_chats):
             try:
-                await call_py.resume_stream(chat_id)
+                await call_py.unmute(chat_id)
                 resumed_count += 1
             except Exception as e:
                 logger.debug(f"ᴄᴏᴜʟᴅ ɴᴏᴛ ʀᴇꜱᴜᴍᴇ {chat_id}: {e}")
@@ -2946,27 +2947,27 @@ async def panel_callbacks(client, callback_query: CallbackQuery):
     
     # ===== VOLUME CONTROLS =====
     elif data == "panel_vol_up":
-        audio_config['volume'] = min(200, audio_config['volume'] + 10)
+        audio_config['volume'] = min(200, audio_config['volume'] + 50)
         save_state()
         await callback_query.answer(f"🔊 ᴠᴏʟᴜᴍᴇ: {audio_config['volume']}%", show_alert=True)
         await refresh_panel(client, callback_query)
     
     elif data == "panel_vol_down":
-        audio_config['volume'] = max(0, audio_config['volume'] - 10)
+        audio_config['volume'] = max(0, audio_config['volume'] - 50)
         save_state()
         await callback_query.answer(f"🔉 ᴠᴏʟᴜᴍᴇ: {audio_config['volume']}%", show_alert=True)
         await refresh_panel(client, callback_query)
     
     # ===== BASS CONTROLS =====
     elif data == "panel_bass_up":
-        audio_config['bass'] = min(60, audio_config['bass'] + 5)
+        audio_config['bass'] = min(60, audio_config['bass'] + 60)
         audio_config['highpass'] = audio_config['bass'] > 0
         save_state()
         await callback_query.answer(f"🎸 ʙᴀꜱꜱ: {audio_config['bass']}/60", show_alert=True)
         await refresh_panel(client, callback_query)
     
     elif data == "panel_bass_down":
-        audio_config['bass'] = max(0, audio_config['bass'] - 5)
+        audio_config['bass'] = max(0, audio_config['bass'] - 30)
         audio_config['highpass'] = audio_config['bass'] > 0
         save_state()
         await callback_query.answer(f"🎸 ʙᴀꜱꜱ: {audio_config['bass']}/60", show_alert=True)
@@ -2974,26 +2975,26 @@ async def panel_callbacks(client, callback_query: CallbackQuery):
     
     # ===== TREBLE CONTROLS =====
     elif data == "panel_treble_up":
-        audio_config['treble'] = min(60, audio_config['treble'] + 5)
+        audio_config['treble'] = min(60, audio_config['treble'] + 60)
         save_state()
         await callback_query.answer(f"🎵 ᴛʀᴇʙʟᴇ: {audio_config['treble']}/60", show_alert=True)
         await refresh_panel(client, callback_query)
     
     elif data == "panel_treble_down":
-        audio_config['treble'] = max(0, audio_config['treble'] - 5)
+        audio_config['treble'] = max(0, audio_config['treble'] - 30)
         save_state()
         await callback_query.answer(f"🎵 ᴛʀᴇʙʟᴇ: {audio_config['treble']}/60", show_alert=True)
         await refresh_panel(client, callback_query)
     
     # ===== GAIN CONTROLS =====
     elif data == "panel_gain_up":
-        audio_config['gain'] = min(60, audio_config['gain'] + 5)
+        audio_config['gain'] = min(60, audio_config['gain'] + 60)
         save_state()
         await callback_query.answer(f"📈 ɢᴀɪɴ: {audio_config['gain']}/60", show_alert=True)
         await refresh_panel(client, callback_query)
     
     elif data == "panel_gain_down":
-        audio_config['gain'] = max(0, audio_config['gain'] - 5)
+        audio_config['gain'] = max(0, audio_config['gain'] - 30)
         save_state()
         await callback_query.answer(f"📈 ɢᴀɪɴ: {audio_config['gain']}/60", show_alert=True)
         await refresh_panel(client, callback_query)
@@ -3002,10 +3003,10 @@ async def panel_callbacks(client, callback_query: CallbackQuery):
     elif data == "panel_reset":
         # ✅ FIX: Use .update() instead of reassigning
         audio_config.update({
-            'volume': 100,
+            'volume': 200,
             'bass': 0,
             'treble': 0,
-            'gain': 0,
+            'gain': 15,
             'compressor': True,
             'limiter': True,
             'highpass': False,
@@ -3179,8 +3180,7 @@ if __name__ == "__main__":
         print("\n✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
         print("📌 ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ")
         print("📌 ᴀᴜᴅɪᴏ ᴄᴏᴍᴍᴀɴᴅꜱ: /ʟᴇᴠᴇʟ, /ʙᴀꜱꜱ, /ᴛʀᴇʙʟᴇ, /ɢᴀɪɴ, /ᴇꜰꜰᴇᴄᴛꜱ")
-        print("📌 ᴇxᴛʀᴀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ")
-        print("📌 ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ: /screenshare on, /screenshare off")
+        print("📌 ᴇxᴛʀᴀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ, /panel")
         print("⚠️ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ ɢᴇᴛ ɴᴏ ʀᴇꜱᴘᴏɴꜱᴇ (ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ)\n")
         
         # Idle (blocks until interrupted)
@@ -3195,33 +3195,6 @@ if __name__ == "__main__":
     finally:
         # ==================== CLEANUP ====================
         print("\n🧹 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ...")
-        
-        # Stop all active screenshares
-        for ss_chat in list(screen_shares.keys()):
-            try:
-                info = screen_shares[ss_chat]
-                info["_closing"] = True
-                proc = info.get("process")
-                task = info.get("task")
-                # Cancel task first
-                if task and not task.done():
-                    task.cancel()
-                # Kill ffmpeg
-                if proc and proc.poll() is None:
-                    proc.terminate()
-                    try:
-                        proc.wait(timeout=2)
-                    except subprocess.TimeoutExpired:
-                        proc.kill()
-                # Leave call
-                try:
-                    call_py.leave_call(ss_chat)
-                except Exception:
-                    pass
-                print(f"    ꜱᴛᴏᴘᴘᴇᴅ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ: {ss_chat}")
-            except Exception as e:
-                print(f"    ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴄʟᴇᴀɴᴜᴘ ᴇʀʀᴏʀ {ss_chat}: {e}")
-        screen_shares.clear()
         
         # Leave all forward chats
         for chat in list(forward_chats):
