@@ -56,7 +56,7 @@ from pytgcalls.exceptions import NoActiveGroupCall
 # Keep this file PRIVATE — anyone with it can control your bot & account.
 API_ID = 29177322
 API_HASH = "1b8573accde3d0b7c35e43cdbb36e523"
-BOT_TOKEN = "8554005804:AAGjW8m_T6e9SrWmzXmLechUKYgANbz-IDs"
+BOT_TOKEN = "8592205626:AAFgX1hhm8WmWym6hjU5AAVxYq8gclUo1ac"
 OWNER_ID = 8305984975
 STRING_SESSION = "BQG9NeoAKgnwMUVxrdLuZqchTSFQaiKJpPuSYhmG29j15hA7BHwFt5-BlIbFOhO4aY6NHKSgdeqp6FmGtIk0_6Aao11efgSUBx23sbDiFj-1Wq2YyZnnUteWe7ao5tienj13NGwYnrxb3pbQpFMeQFwGhtfUzXbVTgiVT4KD3xks7bFfeA_bpkuM50WEs_4yB9KFzsLQZ99oirkxmUXe8r9DDiXKvpkppPKO50Np6gArSQ_MUI7f5sxW9RMNl6YwJYfI837hkPIjFL9ZkgqG2KXV-wCai93e5bR2K_zPS6vh6rZ8RCv_mfjtjaf0hDpsx4Eh7FDgWmWk2VNGcGUdz3ODozAE4QAAAAIJm0jrAA"
 RECORD_GROUP = -1003970175858
