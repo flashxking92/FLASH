@@ -22,6 +22,7 @@ import logging
 import asyncio
 import warnings
 import time
+import subprocess
 warnings.filterwarnings("ignore", category=DeprecationWarning)
 
 # Try to import scipy, fallback to basic processing if not available
@@ -53,12 +54,12 @@ from pytgcalls.exceptions import NoActiveGroupCall
 # ==================== ᴄᴏɴꜰɪɢᴜʀᴀᴛɪᴏɴ ====================
 # ⚠️ Credentials hardcoded directly (no environment variables).
 # Keep this file PRIVATE — anyone with it can control your bot & account.
-API_ID = 38756298
-API_HASH = "7acf851e8e2533ab5a02c6b9755f1d69"
-BOT_TOKEN = "8901346149:AAFo8_Mt55HVvRuKyZqueEBDS2ZA1j5--bg"
+API_ID = 29177322
+API_HASH = "1b8573accde3d0b7c35e43cdbb36e523"
+BOT_TOKEN = "8554005804:AAGjW8m_T6e9SrWmzXmLechUKYgANbz-IDs"
 OWNER_ID = 8305984975
-STRING_SESSION = "BQJPX8oAPpN8FWSRQCUIo3ULaiV_9Hyi-X-cKpn710b7nGNqHiHcfC1OA9g7bZaXklI75KLdlMwIv7AZ3XpV1gpRW5tmU6JWmndj1fC5hK-kxAeB4tR5AubFmKVj4g7gWLaLm9tkgo8gTGHuEfRk5_RySMICCUJfnegO4Y2W65nCBk5G8OKh4D3ppCkuUnV2Txm7YD8Qm2CGX6m9orXu8f4aGsSsywlxEdEDooES4PYF9plXh3YkMERiQbNoBK6Wlnw-jbOQFLtsJUsKGJvDBc3Dc57SYjWUlkj5OhF4BAdnrJ_52EuFftFW4zqdlNV7si6DnZ3zBhMMtRCK3FcXW_mGgnTVSAAAAAFq1aUDAA"
-RECORD_GROUP = -1004345811603
+STRING_SESSION = "BQG9NeoAKgnwMUVxrdLuZqchTSFQaiKJpPuSYhmG29j15hA7BHwFt5-BlIbFOhO4aY6NHKSgdeqp6FmGtIk0_6Aao11efgSUBx23sbDiFj-1Wq2YyZnnUteWe7ao5tienj13NGwYnrxb3pbQpFMeQFwGhtfUzXbVTgiVT4KD3xks7bFfeA_bpkuM50WEs_4yB9KFzsLQZ99oirkxmUXe8r9DDiXKvpkppPKO50Np6gArSQ_MUI7f5sxW9RMNl6YwJYfI837hkPIjFL9ZkgqG2KXV-wCai93e5bR2K_zPS6vh6rZ8RCv_mfjtjaf0hDpsx4Eh7FDgWmWk2VNGcGUdz3ODozAE4QAAAAIJm0jrAA"
+RECORD_GROUP = -1003970175858
 # ======================================================
 
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
@@ -68,10 +69,20 @@ logger = logging.getLogger(__name__)
 logging.getLogger("pyrogram").setLevel(logging.WARNING)
 logging.getLogger("pytgcalls").setLevel(logging.WARNING)
 
-AUDIO_PARAMETERS = AudioParameters(bitrate=48000, channels=2)
+AUDIO_CHANNELS = 2
+AUDIO_PARAMETERS = AudioParameters(bitrate=48000, channels=AUDIO_CHANNELS)
 
 # ==================== ᴄʟɪᴇɴᴛꜱ ====================
 bot_app = Client("bot_session_v5", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+try:
+    with open("bot_state.json", "r") as _sf:
+        _saved_sess = json.load(_sf).get("string_session")
+    if isinstance(_saved_sess, str) and len(_saved_sess) > 50:
+        STRING_SESSION = _saved_sess
+        print("🔑 ᴜꜱɪɴɢ ᴜᴘᴅᴀᴛᴇᴅ ꜱᴛʀɪɴɢ_ꜱᴇꜱꜱɪᴏɴ ꜰʀᴏᴍ ꜱᴛᴀᴛᴇ ꜰɪʟᴇ (/setsession)")
+except Exception:
+    pass
+
 user_app = Client("user_session_v5", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
 call_py = PyTgCalls(user_app)
 
@@ -98,6 +109,34 @@ audio_config = {
 
     'highpass': True,    # Low rumble remove
     'lowpass': False     # High clarity maintain
+}
+
+# ==================== VIDEO RELAY STATE (SCREEN / CAMERA / SCREEN+CAMERA) ====================
+# Bot headless hai -> na real screen na real camera. Teeno modes ek generated
+# ffmpeg test-pattern ko VC me VIDEO track ki tarah relay karte hain.
+is_screensharing = False          # compat flag: koi bhi video relay active hai kya
+video_relay = {}                  # chat_id -> "screen" | "camera" | "screencamera"
+
+VIDEO_MODES = {
+    "screen": {
+        "file": "screen_pattern.mp4",
+        "ff_inputs": ["-f", "lavfi", "-i", "testsrc=size=640x360:rate=15"],
+        "ff_filter": [],
+        "label": "🖥️ SCREENSHARE",
+    },
+    "camera": {
+        "file": "camera_pattern.mp4",
+        "ff_inputs": ["-f", "lavfi", "-i", "testsrc2=size=640x360:rate=15"],
+        "ff_filter": [],
+        "label": "📷 CAMERA",
+    },
+    "screencamera": {
+        "file": "screencamera_pattern.mp4",
+        "ff_inputs": ["-f", "lavfi", "-i", "testsrc=size=640x360:rate=15",
+                      "-f", "lavfi", "-i", "testsrc2=size=640x360:rate=15"],
+        "ff_filter": ["-filter_complex", "hstack=inputs=2"],
+        "label": "🖥️📷 SCREEN+CAMERA",
+    },
 }
 
 # ==================== ᴘᴇʀꜱɪꜱᴛᴇɴᴄᴇ ====================
@@ -414,6 +453,27 @@ def apply_soft_gain(audio_data, gain_level):
     return processed.astype(np.int16)
 
 def process_audio(audio_data):
+    """ᴅɪꜱᴘᴀᴛᴄʜᴇʀ: ᴘʀᴏᴄᴇꜱꜱ ᴇᴀᴄʜ ᴄʜᴀɴɴᴇʟ ꜱᴇᴘᴀʀᴀᴛᴇʟʏ ꜱᴏ ꜱᴛᴇʀᴇᴏ ᴅᴏᴇꜱ ɴᴏᴛ ʙʟᴇᴇᴅ"""
+    if audio_data is None or len(audio_data) == 0:
+        return audio_data
+    try:
+        # Stereo frames are interleaved L,R,L,R... -> filter each channel on its own
+        if AUDIO_CHANNELS == 2 and audio_data.ndim == 1 and len(audio_data) % 2 == 0:
+            stereo = audio_data.reshape(-1, 2)
+            left = _process_mono_chain(stereo[:, 0].copy())
+            right = _process_mono_chain(stereo[:, 1].copy())
+            n = min(len(left), len(right))
+            out = np.empty((n, 2), dtype=np.int16)
+            out[:, 0] = left[:n]
+            out[:, 1] = right[:n]
+            return out.reshape(-1)
+        return _process_mono_chain(audio_data)
+    except Exception as e:
+        logger.error(f"ᴀᴜᴅɪᴏ ᴅɪꜱᴘᴀᴛᴄʜ ᴇʀʀᴏʀ: {e}")
+        return audio_data
+
+
+def _process_mono_chain(audio_data):
     """ᴀᴘᴘʟʏ ᴀʟʟ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ɪɴ ᴄʜᴀɪɴ (HPF → Bass → Gain → Volume → Treble → LPF)"""
 
     if audio_data is None or len(audio_data) == 0:
@@ -506,6 +566,14 @@ async def _forward_incoming_frames(update):
             processed_output = await loop.run_in_executor(None, process_audio, mixed_output)
             mixed_bytes = processed_output.tobytes()
             
+            # 🎙 MP3 RECORDING: jo audio forward VC me ja raha hai wahi capture karo
+            if mp3_rec["active"] and mp3_rec["fh"] is not None:
+                try:
+                    mp3_rec["fh"].write(mixed_bytes)
+                    mp3_rec["bytes"] += len(mixed_bytes)
+                except Exception:
+                    pass
+            
             # ✅ FIX: Copy forward_chats to list to avoid mutation during iteration
             for chat_id in list(forward_chats):
                 try:
@@ -519,6 +587,291 @@ async def _forward_incoming_frames(update):
             logger.error(f"ᴀᴜᴅɪᴏ ʜᴀɴᴅʟᴇʀ ᴇʀʀᴏʀ: {e}")
 
 # ==================== ᴄʜᴀᴛ ᴍᴀɴᴀɢᴇᴍᴇɴᴛ ====================
+
+# ==================== MP3 RECORDING (startrecord / stoprecord) ====================
+# Recording = FORWARD VC ka audio (jo forward ho raha hai wahi processed stream).
+# /startrecord -> forward_chats ki inline button list -> select karo -> us VC ka
+# recording start. Actual capture _forward_incoming_frames me hota hai (mixed_bytes),
+# yaani jo audio forward VCs me ja raha hai bilkul wahi record hota hai.
+# AUDIO = int16 PCM, 48000 Hz, AUDIO_CHANNELS channels. Done pe ffmpeg se MP3 -> upload.
+mp3_rec = {
+    "active": False,
+    "chat": None,       # selected forward VC (label / reference)
+    "fh": None,         # open PCM file handle
+    "pcm_path": None,
+    "task": None,       # auto-stop task
+    "start": 0.0,
+    "duration": 0,
+    "dest": None,       # control chat jaha status + MP3 bhejni hai
+    "status_id": None,
+    "bytes": 0,
+}
+_rec_finalize_lock = asyncio.Lock()
+
+
+async def _auto_stop_recording(duration):
+    """Duration pura hone par recording auto-finalize."""
+    try:
+        await asyncio.sleep(duration)
+    except asyncio.CancelledError:
+        return
+    if mp3_rec["active"]:
+        await _finalize_recording("⏱ ᴛɪᴍᴇ ᴄᴏᴍᴘʟᴇᴛᴇ")
+
+
+async def _start_recording(sel_chat, duration, dest, status_id):
+    """PCM file khol ke recording state set karo + auto-stop schedule. Returns (ok, err)."""
+    if mp3_rec["active"]:
+        return False, "already"
+    try:
+        pcm_path = f"rec_{int(time.time())}_{sel_chat}.pcm"
+        fh = open(pcm_path, "wb")
+    except Exception as e:
+        return False, str(e)
+    mp3_rec.update({
+        "active": True,
+        "chat": sel_chat,
+        "fh": fh,
+        "pcm_path": pcm_path,
+        "start": time.time(),
+        "duration": duration,
+        "dest": dest,
+        "status_id": status_id,
+        "bytes": 0,
+    })
+    mp3_rec["task"] = asyncio.create_task(_auto_stop_recording(duration))
+    logger.info(f"mp3 recording started: {duration}s, forward VC {sel_chat} -> {dest}")
+    return True, None
+
+
+async def _finalize_recording(reason):
+    """Recording rok kar PCM->MP3 encode kar ke upload karo. Double-call safe."""
+    from datetime import datetime
+    async with _rec_finalize_lock:
+        if not mp3_rec["active"]:
+            return
+        # sabse pehle capture band karo taaki aur na likhe
+        mp3_rec["active"] = False
+
+        task = mp3_rec.get("task")
+        if task is not None and not task.done():
+            task.cancel()
+
+        fh = mp3_rec["fh"]
+        pcm_path = mp3_rec["pcm_path"]
+        dest = mp3_rec["dest"]
+        started = mp3_rec["start"]
+        vc_chat = mp3_rec["chat"]
+        nbytes = mp3_rec["bytes"]
+
+        try:
+            if fh is not None:
+                fh.flush()
+                fh.close()
+        except Exception:
+            pass
+
+        mp3_rec["fh"] = None
+        mp3_rec["task"] = None
+
+        actual = max(1, int(time.time() - started))
+
+        def _reset():
+            mp3_rec["chat"] = None
+            mp3_rec["dest"] = None
+            mp3_rec["status_id"] = None
+            mp3_rec["pcm_path"] = None
+            mp3_rec["bytes"] = 0
+
+        # koi audio capture hi nahi hua
+        if not pcm_path or nbytes == 0 or not os.path.exists(pcm_path):
+            if dest is not None:
+                try:
+                    await bot_app.send_message(
+                        dest,
+                        "❌ **ʀᴇᴄᴏʀᴅɪɴɢ ꜱᴀɪʟᴇᴅ**\n\n"
+                        "Koi audio capture nahi hua.\n"
+                        "Forward VC me awaaz aa rahi thi? (mute ho to kuch capture nahi hota)"
+                    )
+                except Exception:
+                    pass
+            if pcm_path and os.path.exists(pcm_path):
+                try:
+                    os.remove(pcm_path)
+                except Exception:
+                    pass
+            _reset()
+            return
+
+        mp3_path = (pcm_path[:-4] + ".mp3") if pcm_path.endswith(".pcm") else (pcm_path + ".mp3")
+        out_name = datetime.now().strftime("recording_%Y%m%d_%H%M%S.mp3")
+        cleanup_paths = [pcm_path, mp3_path]
+
+        # ---- ffmpeg encode: raw s16le -> mp3 ----
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "ffmpeg", "-y",
+                "-f", "s16le", "-ar", "48000", "-ac", str(AUDIO_CHANNELS),
+                "-i", pcm_path,
+                "-codec:a", "libmp3lame", "-b:a", "128k",
+                mp3_path,
+                stdout=asyncio.subprocess.DEVNULL,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            _, stderr = await proc.communicate()
+            if proc.returncode != 0 or not os.path.exists(mp3_path):
+                err_tail = (stderr or b"").decode(errors="ignore")[-400:]
+                raise RuntimeError(err_tail or f"ffmpeg exit {proc.returncode}")
+        except Exception as e:
+            logger.error(f"mp3 encode error: {e}")
+            if dest is not None:
+                try:
+                    await bot_app.send_message(dest, f"❌ **MP3 ᴇɴᴄᴏᴅᴇ ꜱᴀɪʟᴇᴅ**\n\n`{str(e)[:300]}`")
+                except Exception:
+                    pass
+            for p in cleanup_paths:
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+            _reset()
+            return
+
+        try:
+            os.rename(mp3_path, out_name)
+            upload_path = out_name
+            cleanup_paths.append(out_name)
+        except Exception:
+            upload_path = mp3_path
+
+        try:
+            size_mb = round(os.path.getsize(upload_path) / (1024 * 1024), 2)
+        except Exception:
+            size_mb = 0
+
+        # ---- upload MP3 to control chat ----
+        try:
+            await bot_app.send_audio(
+                dest,
+                audio=upload_path,
+                caption=(
+                    "🎙 **ʀᴇᴄᴏʀᴅɪɴɢ ᴄᴏᴍᴘʟᴇᴛᴇ**\n\n"
+                    f"🎙 **Forward VC:** `{vc_chat}`\n"
+                    f"⏱ **Length:** {actual}s\n"
+                    f"💾 **Size:** {size_mb} MB\n"
+                    f"📌 **Reason:** {reason}"
+                ),
+                title=out_name.replace(".mp3", ""),
+                performer="Forward VC Recorder",
+                duration=actual,
+            )
+            logger.info(f"recording uploaded to {dest} ({actual}s, {size_mb}MB, vc={vc_chat})")
+        except Exception as e:
+            logger.error(f"recording upload error: {e}")
+            if dest is not None:
+                try:
+                    await bot_app.send_message(dest, f"❌ **ᴜᴘʟᴏᴀᴅ ꜱᴀɪʟᴇᴅ**\n\n`{str(e)[:300]}`")
+                except Exception:
+                    pass
+        finally:
+            for p in cleanup_paths:
+                if os.path.exists(p):
+                    try:
+                        os.remove(p)
+                    except Exception:
+                        pass
+            _reset()
+
+
+@bot_app.on_message(pyro_filters.command("startrecord") & authorized_only())
+async def cmd_startrecord(client, message):
+    """/startrecord [sec] -- forward VC choose kar ke uska audio record (default 60s, 5-3600)."""
+    parts = message.text.split()
+    duration = 60
+    if len(parts) >= 2:
+        raw = re.sub(r'[^\d]', '', parts[1])
+        if not raw:
+            await message.reply(
+                "❌ **ɢᴀʟᴀᴛ ᴅᴜʀᴀᴛɪᴏɴ**\n\n"
+                "ᴜꜱᴀɢᴇ: `/startrecord` ya `/startrecord <seconds>`\n"
+                "ʀᴀɴɢᴇ: 5 - 3600 sec"
+            )
+            return
+        duration = int(raw)
+
+    if duration < 5 or duration > 3600:
+        await message.reply(
+            "❌ **ᴅᴜʀᴀᴛɪᴏɴ ʀᴀɴɢᴇ**\n\n"
+            "5 se 3600 seconds ke beech value do.\n"
+            f"Tumne diya: `{duration}s`"
+        )
+        return
+
+    if mp3_rec["active"]:
+        elapsed = int(time.time() - mp3_rec["start"])
+        await message.reply(
+            "⚠️ **ᴀʟʀᴇᴀᴅʏ ʀᴇᴄᴏʀᴅɪɴɢ**\n\n"
+            f"⏱ Chal rahi hai: `{elapsed}s`\n"
+            "Rokne ke liye `/stoprecord` ya Stop button dabao."
+        )
+        return
+
+    if not forward_chats:
+        await message.reply(
+            "❌ **ᴋᴏɪ Ꝗᴏʀᴡᴀʀᴅɪɴɢ ᴀᴄᴛɪᴠᴇ ɴᴀĥɪ**\n\n"
+            "Pehle `/join <chat_id>` se kisi VC me forwarding chalu karo,\n"
+            "phir `/startrecord` se us VC ka audio record kar sakte ho."
+        )
+        return
+
+    # ---- forward_chats ki inline button list banao ----
+    buttons = []
+    for cid in sorted(forward_chats):
+        title = str(cid)
+        try:
+            chat = await user_app.get_chat(cid)
+            if getattr(chat, "title", None):
+                title = chat.title
+            elif getattr(chat, "first_name", None):
+                title = chat.first_name
+        except Exception:
+            pass
+        label = f"🎙 {title}"
+        if len(label) > 40:
+            label = label[:37] + "..."
+        buttons.append((label, f"rec_pick:{cid}:{duration}", ButtonStyle.SUCCESS))
+    buttons.append(("❌ ᴄᴀɴᴄᴇʟ", "rec_cancel", ButtonStyle.DANGER))
+    keyboard = build_keyboard(buttons, row_width=1)
+
+    await message.reply(
+        "🎙 **ʀᴇᴄᴏʀᴅɪɴɢ — Ꝗᴏʀᴡᴀʀᴅ ᴠᴄ ᴄĥᴏᴏꜱᴇ ᴋᴀʀᴏ**\n\n"
+        f"⏱ **Duration:** {duration}s\n"
+        f"📤 **Active forwards:** {len(forward_chats)}\n\n"
+        "Jis VC ka audio record karna hai use niche select karo 👇",
+        reply_markup=keyboard,
+    )
+
+
+@bot_app.on_message(pyro_filters.command("stoprecord") & authorized_only())
+async def cmd_stoprecord(client, message):
+    """/stoprecord -- chal rahi recording rok kar MP3 upload karo."""
+    if not mp3_rec["active"]:
+        await message.reply(
+            "⚠️ **ᴋᴏɪ ʀᴇᴄᴏʀᴅɪɴɢ ᴀᴄᴛɪᴠᴇ ɴᴀĥɪ**\n\n"
+            "`/startrecord` se shuru karo."
+        )
+        return
+    elapsed = int(time.time() - mp3_rec["start"])
+    await message.reply(
+        "⏹ **ʀᴇᴄᴏʀᴅɪɴɢ ꜱᴛᴏᴘ**\n\n"
+        f"⏱ Captured: `{elapsed}s`\n"
+        "🎧 MP3 bana ke bhej rahe hain..."
+    )
+    await _finalize_recording("⏹ ᴍᴀɴᴜᴀʟ ꜱᴛᴏᴘ")
+
+# ==================== END MP3 RECORDING ====================
+
 
 @call_py.on_update(pytg_filters.stream_frame(Direction.INCOMING, Device.MICROPHONE))
 async def audio_forwarder(_, update: StreamFrames):
@@ -539,7 +892,7 @@ async def cache_chat_info(chat_id):
             try:
                 async for dialog in user_app.get_dialogs(limit=50):
                     if dialog.chat.id == chat_id:
-                        logger.info(f"✅ ꜰᴏᴜɴᴅ ɪɴ ᴅɪᴀʟᴏɢꜱ: {chat_id}")
+                        logger.info(f"���� ꜰᴏᴜɴᴅ ɪɴ ᴅɪᴀʟᴏɢꜱ: {chat_id}")
                         return True
             except Exception:
                 pass
@@ -737,7 +1090,7 @@ async def cmd_userlist(client, message):
         else:
             await message.reply(response, reply_markup=buttons)
     except Exception as e:
-        await message.reply(f"❌ **ᴇʀʀᴏʀ:** `{str(e)}`")
+        await message.reply(f"❌ **ᴇʀʀ��ʀ:** `{str(e)}`")
 
 # ==================== ᴄᴜꜱᴛᴏᴍ ʙᴜᴛᴛᴏɴ ꜱᴛʏʟɪɴɢ ====================
 
@@ -808,7 +1161,7 @@ class StyledInlineKeyboardButton(InlineKeyboardButton):
         super().__init__(text=text, callback_data=callback_data, url=url, **kwargs)
         self.style = style
 
-    async def write(self, client: "pyrogram.Client"):
+    async def write(self, client: "Client"):
         if not self.style:
             return await super().write(client)
             
@@ -899,6 +1252,71 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
     # ──────────────────────────────────────────────────────
     # ʀᴇꜰʀᴇꜱʜ ᴜꜱᴇʀʟɪꜱᴛ
     # ──────────────────────────────────────────────────────
+    if data == "rec_stop":
+        if not mp3_rec["active"]:
+            try:
+                await callback_query.message.reply("⚠️ ꜰᴏɪ ᴀᴄᴛɪᴠᴇ ʀᴇᴄᴏʀᴅɪɴɢ ɴᴀĥɪ.")
+            except Exception:
+                pass
+            return
+        try:
+            await callback_query.edit_message_text("⏹ **ʀᴇᴄᴏʀᴅɪɴɢ ꜱᴛᴏᴘ** — MP3 bana ke bhej rahe hain...")
+        except Exception:
+            pass
+        await _finalize_recording("⏹ ʙᴜᴛᴛᴏɴ ꜱᴛᴏᴘ")
+        return
+
+    if data.startswith("rec_pick:"):
+        if mp3_rec["active"]:
+            try:
+                await callback_query.message.reply("⚠️ Ek recording pehle se chal rahi hai. /stoprecord karo.")
+            except Exception:
+                pass
+            return
+        try:
+            _, cid_str, dur_str = data.split(":", 2)
+            sel_chat = int(cid_str)
+            duration = int(dur_str)
+        except Exception:
+            try:
+                await callback_query.message.reply("❌ Invalid selection.")
+            except Exception:
+                pass
+            return
+        if sel_chat not in forward_chats:
+            try:
+                await callback_query.edit_message_text("⚠️ Us chat pe ab forwarding active nahi. `/startrecord` dobara chalao.")
+            except Exception:
+                pass
+            return
+        ok, err = await _start_recording(sel_chat, duration, callback_query.message.chat.id, callback_query.message.id)
+        if not ok:
+            try:
+                await callback_query.message.reply(f"❌ Recording start fail: `{str(err)[:200]}`")
+            except Exception:
+                pass
+            return
+        keyboard = build_keyboard([("⏹ ꜱᴛᴏᴘ & ᴜᴘʟᴏᴀᴅ", "rec_stop", ButtonStyle.DANGER)], row_width=1)
+        try:
+            await callback_query.edit_message_text(
+                "🔴 **ʀᴇᴄᴏʀᴅɪɴɢ ꜱᴛᴀʀᴛᴇᴅ**\n\n"
+                f"🎙 **Forward VC:** `{sel_chat}`\n"
+                f"⏱ **Duration:** {duration}s\n"
+                "📊 **Status:** 🟢 capturing...\n\n"
+                "⏹ Rokna ho to button dabao ya `/stoprecord`. Done pe MP3 yahi milegi.",
+                reply_markup=keyboard,
+            )
+        except Exception:
+            pass
+        return
+
+    if data == "rec_cancel":
+        try:
+            await callback_query.edit_message_text("❌ ʀᴇᴄᴏʀᴅɪɴɢ ᴄᴀɴᴄᴇʟ.")
+        except Exception:
+            pass
+        return
+
     if data == "refresh_userlist":
         if not approved_users:
             keyboard = build_keyboard([
@@ -1037,6 +1455,12 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
 /id - ɢᴇᴛ ᴄʜᴀᴛ ɪᴅ
 /panel - ᴄᴏɴᴛʀᴏʟ ᴘᴀɴᴇʟ
 /joinlink <ʟɪɴᴋ> - ᴊᴏɪɴ ᴠɪᴀ ɪɴᴠɪᴛᴇ ʟɪɴᴋ
+/joingroup <ɪᴅ/@/ʟɪɴᴋ> - ᴊᴏɪɴ ᴀɴʏ ᴄʜᴀᴛ
+/screenshare on|off - ꜱᴄʀᴇᴇɴ ʀᴇʟᴀʏ
+/camera on|off - ᴄᴀᴍᴇʀᴀ ʀᴇʟᴀʏ
+/screencamera on|off - ꜱᴄʀᴇᴇɴ+ᴄᴀᴍᴇʀᴀ
+/startrecord [sec] - ʀᴇᴄᴏʀᴅ (5-3600s, def 60)
+/stoprecord - ʀᴇᴄᴏʀᴅ ꜱᴛᴏᴘ + MP3 ᴜᴘʟᴏᴀᴅ
 ────────────────────
 👤 **ᴜꜱᴇʀ ᴍɢᴍᴛ** (ᴏᴡɴᴇʀ)
 /approve - ᴀᴅᴅ ᴜꜱᴇʀ
@@ -1044,6 +1468,7 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
 /userlist - ʟɪꜱᴛ ᴜꜱᴇʀꜱ
 /setrecordgroup - ᴄʜᴀɴɢᴇ ꜱᴏᴜʀᴄᴇ
 /restart - ʀᴇꜱᴛᴀʀᴛ ʙᴏᴛ
+/setsession <ꜱᴇꜱꜱɪᴏɴ> - ꜱᴇꜱꜱɪᴏɴ ᴜᴘᴅᴀᴛᴇ + ʀᴇꜱᴛᴀʀᴛ
 """
         keyboard = build_keyboard([
             ("🏠 ʜᴏᴍᴇ", "back_start", ButtonStyle.SUCCESS)
@@ -1064,20 +1489,20 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
         username = f"@{user.username}" if user.username else ""
         
         welcome_text = f"""
-✨ **ᴡᴇʟᴄᴏᴍᴇ ᴛᴏ ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅᴇʀ** ✨
+✨ **ᴡᴇʟ��ᴏᴍᴇ ᴛᴏ ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅᴇʀ** ✨
 ────────────────────
-👋 **ʜᴇʟʟᴏ, {first_name}!**
+👋 **ʜ���ʟʟᴏ, {first_name}!**
 {last_name}
 {username}
 ────────────────────
 🎵 **ʀᴇᴀʟ-ᴛɪᴍᴇ ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅɪɴɢ**
-📊 **ꜱʏꜱᴛᴇᴍ:** ██████████ 100% ✅
+📊 **ꜱʏꜱᴛᴇᴍ:** ██████████ 100% ��
 ⚡ **ꜰᴇᴀᴛᴜʀᴇꜱ:**
 • ʀᴇᴀʟ-ᴛɪᴍᴇ ꜰᴏʀᴡᴀʀᴅɪɴɢ
 • ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛꜱ
 • ᴠᴏʟᴜᴍᴇ ᴄᴏɴᴛʀᴏʟ
-• ᴍᴜʟᴛɪ-ᴄʜᴀᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ
-────────────────────
+• ᴍᴜʟᴛɪ-ᴄʜᴀᴛ ꜰᴏʀᴡ��ʀᴅɪɴɢ
+���───────────────────
 📌 **ᴜꜱᴇ /ʜᴇʟᴘ ꜰᴏʀ ᴄᴏᴍᴍᴀɴᴅꜱ**
 """
         keyboard = build_keyboard([
@@ -1163,8 +1588,8 @@ async def cmd_start(client, message):
 📊 **ꜱʏꜱᴛᴇᴍ:** ██████████ 100% ✅
 ⚡ **ꜰᴇᴀᴛᴜʀᴇꜱ:**
 • ʀᴇᴀʟ-ᴛɪᴍᴇ ꜰᴏʀᴡᴀʀᴅɪɴɢ
-• ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛꜱ
-• ᴠᴏʟᴜᴍᴇ ᴄᴏɴᴛʀᴏʟ
+• ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛ��
+• ���ᴏʟᴜᴍᴇ ᴄᴏɴᴛʀᴏʟ
 • ᴍᴜʟᴛɪ-ᴄʜᴀᴛ ꜰᴏʀᴡᴀʀᴅɪɴɢ
 ────────────────────
 📌 **ᴜꜱᴇ /ʜᴇʟᴘ ꜰᴏʀ ᴄᴏᴍᴍᴀɴᴅꜱ**
@@ -1215,6 +1640,7 @@ async def cmd_help(client, message):
 /leaverecord - ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ
 /mute - ᴍᴜᴛᴇ
 /unmute - ᴜɴᴍᴜᴛᴇ
+/automute <on|off> - ᴀᴜᴛᴏ ᴍᴜᴛᴇ ɴᴇᴡ ᴊᴏɪɴꜱ
 ────────────────────
 🎛️ **ᴇꜰꜰᴇᴄᴛꜱ**
 /level <0-200> - ᴠᴏʟᴜᴍᴇ
@@ -1232,6 +1658,12 @@ async def cmd_help(client, message):
 /id - ɢᴇᴛ ᴄʜᴀᴛ ɪᴅ
 /panel - ᴄᴏɴᴛʀᴏʟ ᴘᴀɴᴇʟ (ʙᴜᴛᴛᴏɴꜱ)
 /joinlink <ʟɪɴᴋ> - ᴊᴏɪɴ ᴠɪᴀ ɪɴᴠɪᴛᴇ ʟɪɴᴋ
+/joingroup <ɪᴅ/@/ʟɪɴᴋ> - ᴊᴏɪɴ ᴀɴʏ ᴄʜᴀᴛ
+/screenshare on|off - ꜱᴄʀᴇᴇɴ ʀᴇʟᴀʏ
+/camera on|off - ᴄᴀᴍᴇʀᴀ ʀᴇʟᴀʏ
+/screencamera on|off - ꜱᴄʀᴇᴇɴ+ᴄᴀᴍᴇʀᴀ
+/startrecord [sec] - ʀᴇᴄᴏʀᴅ (5-3600s, def 60)
+/stoprecord - ʀᴇᴄᴏʀᴅ ꜱᴛᴏᴘ + MP3 ᴜᴘʟᴏᴀᴅ
 ────────────────────
 👤 **ᴜꜱᴇʀ ᴍɢᴍᴛ** (ᴏᴡɴᴇʀ)
 /approve - ᴀᴅᴅ ᴜꜱᴇʀ
@@ -1239,6 +1671,7 @@ async def cmd_help(client, message):
 /userlist - ʟɪꜱᴛ ᴜꜱᴇʀꜱ
 /setrecordgroup <ɪᴅ> - ᴄʜᴀɴɢᴇ ꜱᴏᴜʀᴄᴇ
 /restart - ʀᴇꜱᴛᴀʀᴛ ʙᴏᴛ
+/setsession <ꜱᴇꜱꜱɪᴏɴ> - ꜱᴇꜱꜱɪᴏɴ ᴜᴘᴅᴀᴛᴇ + ʀᴇꜱᴛᴀʀᴛ
 """
     keyboard = build_keyboard([
         ("🏠 ʜᴏᴍᴇ", "back_start", ButtonStyle.SUCCESS),
@@ -1260,11 +1693,11 @@ async def cmd_id(client, message):
     id_msg = f"""
 📱 **ᴄʜᴀᴛ ɪɴꜰᴏʀᴍᴀᴛɪᴏɴ**
 
-────────────────────
+───���────────────────
 🔢 **ᴄʜᴀᴛ ɪᴅ:** `{message.chat.id}`
 📌 **ᴛʏᴘᴇ:** {chat_type}
 📝 **ᴛɪᴛʟᴇ:** {message.chat.title or 'ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ'}
-───────────────────
+──────────���────────
 
 ✅ **ᴄᴏᴘʏ ᴛʜɪꜱ ɪᴅ ꜰᴏʀ ᴜꜱᴇ ɪɴ ᴄᴏᴍᴍᴀɴᴅꜱ**
 """
@@ -1380,7 +1813,7 @@ async def cmd_join(client, message):
             return
         status_msg = await message.reply(
             f"🔄 **ᴄᴏɴɴᴇᴄᴛɪɴɢ ᴛᴏ `{chat_id}`...**\n\n"
-            "📡 ᴇꜱᴛᴀʙʟɪꜱʜɪɴɢ ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅɪɴɢ..."
+            "📡 ᴇꜱᴛᴀʙʟɪꜱʜɪɴɢ ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅɪ��ɢ..."
         )
         success, error = await join_call_safe(chat_id)
         if success:
@@ -1432,8 +1865,8 @@ async def cmd_join(client, message):
 
 @bot_app.on_message(pyro_filters.command("rejoin") & authorized_only())
 async def cmd_rejoin(client, message):
-    """ʟᴇᴀᴠᴇ ᴀɴᴅ ᴊᴏɪɴ ᴀʟʟ ᴄʜᴀᴛꜱ ᴀɢᴀɪɴ (ʀᴇᴄᴏᴠᴇʀ ꜰʀᴏᴍ ɴᴇᴛᴡᴏʀᴋ ɪꜱꜱᴜᴇꜱ)"""
-    global is_recording, is_muted  # ← FIX 1: is_muted ADDED
+    """ʟᴇᴀᴠᴇ ᴀɴᴅ ᴊᴏɪɴ ᴀʟʟ ᴄʜᴀᴛꜱ ᴀɢᴀɪɴ (ʀᴇᴄᴏᴠᴇʀ ꜰʀᴏᴍ ɴᴇᴛᴡ��ʀᴋ ɪ��ꜱᴜᴇꜱ)"""
+    global is_recording, is_muted, is_screensharing  # ← FIX 1: is_muted ADDED
     
     status_msg = await message.reply(
         "🔄 **ʀᴇᴊᴏɪɴɪɴɢ ᴀʟʟ ᴄʜᴀᴛꜱ...**\n\n"
@@ -1473,7 +1906,7 @@ async def cmd_rejoin(client, message):
                 is_recording = False
                 rejoin_results["source"]["status"] = "❌"
                 rejoin_results["source"]["error"] = error
-                logger.error(f"ꜰᴀɪʟᴇᴅ ᴛᴏ ʀᴇᴊᴏɪɴ ꜱᴏᴜʀᴄᴇ: {error}")
+                logger.error(f"ꜰᴀɪʟᴇᴅ ᴛᴏ ʀᴇᴊᴏɪɴ ꜱᴏ���ʀᴄᴇ: {error}")
         except Exception as e:
             is_recording = False
             rejoin_results["source"]["status"] = "❌"
@@ -1504,7 +1937,7 @@ async def cmd_rejoin(client, message):
                 success, error = await join_call_safe(chat_id)
                 if success:
                     rejoin_results["forwards"]["success"] += 1
-                    logger.info(f"ʀᴇᴊᴏɪɴᴇᴅ ꜰᴏʀᴡᴀʀᴅ ᴄʜᴀᴛ {chat_id} ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
+                    logger.info(f"ʀᴇᴊᴏɪɴᴇᴅ ꜰᴏʀᴡᴀ��ᴅ ᴄʜᴀᴛ {chat_id} ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
                 else:
                     rejoin_results["forwards"]["failed"] += 1
                     rejoin_results["forwards"]["errors"].append(f"`{chat_id}`: {error[:50]}")
@@ -1588,6 +2021,11 @@ async def cmd_rejoin(client, message):
 
 💡 **ɴᴏᴛᴇ:** ꜰᴀɪʟᴇᴅ ᴄʜᴀᴛꜱ ᴡᴇʀᴇ ᴀᴜᴛᴏᴍᴀᴛɪᴄᴀʟʟʏ ʀᴇᴍᴏᴠᴇᴅ ꜰʀᴏᴍ ꜰᴏʀᴡᴀʀᴅɪɴɢ ʟɪꜱᴛ
 """
+    
+    # video relay: rejoin sab audio-only pe le aata hai -> video state clear
+    if video_relay:
+        video_relay.clear()
+    is_screensharing = False
     
     await status_msg.edit_text(response)
     logger.info(f"ʀᴇᴊᴏɪɴ ᴄᴏᴍᴘʟᴇᴛᴇᴅ: ꜱᴏᴜʀᴄᴇ={rejoin_results['source']['status']}, ꜰᴏʀᴡᴀʀᴅꜱ={rejoin_results['forwards']['success']}/{rejoin_results['forwards']['total']}, ᴍᴜᴛᴇ={is_muted}")
@@ -1778,7 +2216,7 @@ async def cmd_joinlink(client, message):
         return
     
     status_msg = await message.reply(
-        f"🔄 **ᴘʀᴏᴄᴇꜱꜱɪɴɢ ɪɴᴠɪᴛᴇ ʟɪɴᴋ...**\n\n"
+        f"🔄 **ᴘʀ��ᴄᴇꜱꜱɪɴɢ ɪɴᴠɪᴛᴇ ʟɪɴᴋ...**\n\n"
         f"🔗 `{invite_link}`\n\n"
         "📡 ᴀᴛᴛᴇᴍᴘᴛɪɴɢ ᴛᴏ ᴊᴏɪɴ..."
     )
@@ -1799,7 +2237,7 @@ async def cmd_joinlink(client, message):
                 username = f"@{chat.username}"
             else:
                 username = "ᴘʀɪᴠᴀᴛᴇ"
-        except:
+        except Exception:
             username = "ᴘʀɪᴠᴀᴛᴇ"
         
         # ===== SUCCESSFULLY JOINED =====
@@ -1822,7 +2260,7 @@ async def cmd_joinlink(client, message):
 ────────────────────
 📊 **ᴄᴜʀʀᴇɴᴛ ꜱᴛᴀᴛᴜꜱ:**
 • **ʀᴇᴄᴏʀᴅɪɴɢ:** {'🟢 ᴀᴄᴛɪᴠᴇ' if is_recording else '🔴 ɪɴᴀᴄᴛɪᴠᴇ'}
-• **ꜰᴏʀᴡᴀʀᴅɪɴɢ:** {len(forward_chats)} ᴄʜᴀᴛꜱ
+• **ꜰᴏʀᴡ��ʀᴅɪɴɢ:** {len(forward_chats)} ᴄʜᴀᴛꜱ
 • **ꜱᴏᴜʀᴄᴇ:** `{RECORD_SOURCE}`
 """
         await status_msg.edit_text(join_msg)
@@ -1838,12 +2276,12 @@ async def cmd_joinlink(client, message):
                 f"📨 **ᴊᴏɪɴ ʀᴇQᴜᴇꜱᴛ ꜱᴇɴᴛ!**\n\n"
                 f"🔗 `{invite_link}`\n"
                 f"📋 **ᴛʏᴘᴇ:** 🔵 ʀᴇQᴜᴇꜱᴛ ʟɪɴᴋ (ɴᴇᴇᴅꜱ ᴀᴅᴍɪɴ ᴀᴘᴘʀᴏᴠᴀʟ)\n\n"
-                f"────────────────────\n"
+                f"──���─────────────────\n"
                 f"⏳ **ꜱᴛᴀᴛᴜꜱ:** ᴘᴇɴᴅɪɴɢ ᴀᴘᴘʀᴏᴠᴀʟ\n\n"
                 f"💡 **ɴᴇxᴛ ꜱᴛᴇᴘꜱ:**\n"
                 f"• ᴡᴀɪᴛ ꜰᴏʀ ᴀᴅᴍɪɴ ᴛᴏ ᴀᴘᴘʀᴏᴠᴇ ʏᴏᴜʀ ʀᴇQᴜᴇꜱᴛ\n"
                 f"• ᴀꜰᴛᴇʀ ᴀᴘᴘʀᴏᴠᴀʟ, ᴜꜱᴇ: `/ᴊᴏɪɴ <ᴄʜᴀᴛ_ɪᴅ>`\n"
-                f"• ᴛᴏ ɢᴇᴛ ᴄʜᴀᴛ ɪᴅ, ꜰᴏʀᴡᴀʀᴅ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴛᴏ @ꜱᴛᴀᴛᴜꜱʀᴏʙᴏᴛ"
+                f"• ᴛᴏ ɢᴇᴛ ᴄʜᴀᴛ ��ᴅ, ꜰᴏʀᴡᴀʀᴅ ᴀ ᴍᴇꜱꜱᴀɢᴇ ᴛᴏ @ꜱᴛᴀᴛᴜꜱʀᴏʙᴏᴛ"
             )
             return
         
@@ -1938,7 +2376,7 @@ async def cmd_joingroup(client, message):
                         username = f"@{chat.username}"
                     else:
                         username = "ᴘʀɪᴠᴀᴛᴇ"
-                except:
+                except Exception:
                     username = "ᴘʀɪᴠᴀᴛᴇ"
                     
             except Exception as e:
@@ -2091,15 +2529,15 @@ async def cmd_joingroup(client, message):
         elif "invalid" in error_str and "hash" in error_str:
             response = f"❌ **ɪɴᴠᴀʟɪᴅ ɪɴᴠɪᴛᴇ ʟɪɴᴋ!**\n\n📌 `{input_value}`\n\nᴘʟᴇᴀꜱᴇ ᴄʜᴇᴄᴋ ᴛʜᴇ ʟɪɴᴋ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ."
         elif "flood" in error_str:
-            response = "⚠️ **ꜰʟᴏᴏᴅ ᴄᴏɴᴛʀᴏʟ!**\n\nᴘʟᴇᴀꜱᴇ ᴡᴀɪᴛ ᴀ ꜰᴇᴡ ᴍɪɴᴜᴛᴇꜱ ʙᴇꜰᴏʀᴇ ᴛʀʏɪɴɢ ᴀɢᴀɪɴ."
+            response = "⚠️ **ꜰʟᴏᴏᴅ ᴄᴏɴᴛʀᴏ��!**\n\nᴘʟᴇᴀꜱᴇ ᴡᴀɪᴛ ᴀ ꜰᴇᴡ ᴍɪɴᴜᴛᴇꜱ ʙᴇꜰᴏʀᴇ ᴛʀʏɪɴɢ ᴀɢᴀɪɴ."
         elif "not found" in error_str:
-            response = f"❌ **ᴄʜᴀᴛ ɴᴏᴛ ꜰᴏᴜɴᴅ!**\n\n📌 `{input_value}`\n\nᴛʜᴇ ᴄʜᴀᴛ ᴍᴀʏ ɴᴏᴛ ᴇxɪꜱᴛ ᴏʀ ʏᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ ᴀᴄᴄᴇꜱꜱ."
+            response = f"❌ **ᴄʜᴀᴛ ɴ���ᴛ ꜰᴏᴜɴᴅ!**\n\n📌 `{input_value}`\n\nᴛʜᴇ ᴄʜᴀᴛ ᴍᴀʏ ɴᴏᴛ ᴇxɪꜱᴛ ᴏʀ ʏᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ ᴀᴄᴄᴇꜱꜱ."
         elif "private" in error_str:
             response = f"❌ **ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ!**\n\n📌 `{input_value}`\n\nᴜꜱᴇ ᴀɴ ɪɴᴠɪᴛᴇ ʟɪɴᴋ ᴛᴏ ᴊᴏɪɴ ᴛʜɪꜱ ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ."
         elif "user" in error_str and "deactivated" in error_str:
             response = "❌ **ᴜꜱᴇʀ ᴀᴄᴄᴏᴜɴᴛ ɪꜱꜱᴜᴇ!**\n\nᴛʜᴇ ʙᴏᴛ ᴜꜱᴇʀ ᴀᴄᴄᴏᴜɴᴛ ᴍᴀʏ ʜᴀᴠᴇ ʙᴇᴇɴ ʟᴏɢɢᴇᴅ ᴏᴜᴛ."
         elif "already" in error_str and "participant" in error_str:
-            response = f"ℹ️ **ᴀʟʀᴇᴀᴅʏ ᴀ ᴘᴀʀᴛɪᴄɪᴘᴀɴᴛ!**\n\n📌 `{input_value}`\n\nʏᴏᴜ ᴀʀᴇ ᴀʟʀᴇᴀᴅʏ ɪɴ ᴛʜɪꜱ ᴄʜᴀᴛ."
+            response = f"ℹ️ **ᴀʟʀᴇᴀᴅʏ ᴀ ᴘᴀʀᴛɪᴄɪᴘᴀɴᴛ!**\n\n📌 `{input_value}`\n\nʏ��ᴜ ᴀʀᴇ ᴀʟʀᴇᴀᴅʏ ɪɴ ᴛʜɪꜱ ᴄʜᴀᴛ."
         else:
             response = f"❌ **ᴇʀʀᴏʀ ᴏᴄᴄᴜʀʀᴇᴅ!**\n\n⚠️ `{error_msg[:200]}`"
         
@@ -2135,10 +2573,10 @@ async def cmd_mute(client, message):
     mute_msg = f"""
 🔇 **ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅɪɴɢ ᴍᴜᴛᴇᴅ!**
 
-────────────────────
+─────���──────────────
 📊 **ꜱᴛᴀᴛᴜꜱ:** 🔇 ᴘᴀᴜꜱᴇᴅ
 📤 **ꜰᴏʀᴡᴀʀᴅɪɴɢ:** {len(forward_chats)} ᴄʜᴀᴛꜱ
-⏸️ **ᴘᴀᴜꜱᴇᴅ:** {paused_count} ꜱᴛʀᴇᴀᴍꜱ
+⏸️ **ᴘᴀᴜꜱᴇᴅ:** {paused_count} ꜱ��ʀᴇᴀᴍꜱ
 📡 **ꜱᴏᴜʀᴄᴇ:** 🟢 ᴀᴄᴛɪᴠᴇ (ɴᴏᴛ ᴘᴀᴜꜱᴇᴅ)
 🎙️ **ᴍɪᴄ:** 🔇 ᴘᴀᴜꜱᴇᴅ
 ────────────────────
@@ -2207,7 +2645,6 @@ async def cmd_automute(client, message):
             f"🎛️ **ᴀᴜᴛᴏᴍᴜᴛᴇ ꜱᴛᴀᴛᴜꜱ:** {status_icon} {status_text}\n\n"
             f"📊 **ᴄᴜʀʀᴇɴᴛ ꜱᴛᴀᴛᴇ:** {'🔇 ᴍᴜᴛᴇᴅ' if is_muted else '🔊 ʟɪᴠᴇ'}\n\n"
             f"💡 `/automute on` - ɴᴇᴡ ᴊᴏɪɴꜱ ᴀᴜᴛᴏ ᴍᴜᴛᴇ\n"
-            f"💡 `/automute off` - ɴᴇᴡ ᴊᴏɪɴꜱ ᴀᴜᴛᴏ ᴜɴᴍᴜᴛᴇ\n"
             f"💡 `/automute off` - ᴀʟʟ ᴄʜᴀᴛꜱ ᴜɴᴍᴜᴛᴇ"
         )
         return
@@ -2254,7 +2691,7 @@ async def cmd_automute(client, message):
     else:
         await message.reply("❌ **ɪɴᴠᴀʟɪᴅ!**\n\nᴜꜱᴇ `/automute on` ᴏʀ `/automute off`")
         
-# ===== ᴇꜰꜰᴇᴄᴛꜱ ᴄᴏᴍᴍᴀɴᴅꜱ =====
+# ===== ᴇꜰꜰᴇᴄᴛ�� ᴄᴏᴍᴍᴀɴᴅꜱ =====
 
 @bot_app.on_message(pyro_filters.command("level") & authorized_only())
 async def cmd_level(client, message):
@@ -2321,7 +2758,7 @@ async def cmd_bass(client, message):
             save_state()
             bar = create_progress_bar(level, 60)
             await message.reply(
-                f"✅ **ʙᴀꜱꜱ ʙᴏᴏꜱᴛ ᴜᴘᴅᴀᴛᴇᴅ!**\n\n"
+                f"��� **ʙᴀꜱꜱ ʙᴏᴏꜱᴛ ᴜᴘᴅᴀᴛᴇᴅ!**\n\n"
                 f"📊 **ɴᴇᴡ:** `{level}`\n"
                 f"📈 {bar} `{level}/60`\n"
                 f"📌 **ꜱᴛᴀᴛᴜꜱ:** {get_effect_status(level, 60)}\n"
@@ -2421,7 +2858,7 @@ async def cmd_gain(client, message):
         await message.reply(
             f"❌ **ɪɴᴠᴀʟɪᴅ ɴᴜᴍʙᴇʀ!**\n\n"
             f"📌 **ʏᴏᴜ ᴇɴᴛᴇʀᴇᴅ:** `{parts[1]}`\n"
-            f"💡 ᴘʟᴇᴀꜱᴇ ᴇɴᴛᴇʀ ᴀ ɴᴜᴍᴇʀɪᴄ ᴠᴀʟᴜᴇ"
+            f"💡 ᴘʟ��ᴀꜱᴇ ᴇɴᴛᴇʀ ᴀ ɴᴜᴍᴇʀɪᴄ ᴠᴀʟᴜᴇ"
         )
 
         
@@ -2452,13 +2889,13 @@ async def cmd_reset(client, message):
 
 ────────────────────
 🔊 **ᴠᴏʟᴜᴍᴇ:** `{old_config['volume']}%` → `{audio_config['volume']}%` ✅
-🎸 **ʙᴀꜱꜱ:** `{old_config['bass']}` → `{audio_config['bass']}` ✅
+🎸 **ʙᴀꜱꜱ:** `{old_config['bass']}` ��� `{audio_config['bass']}` ✅
 🎵 **ᴛʀᴇʙʟᴇ:** `{old_config['treble']}` → `{audio_config['treble']}` ✅
 📈 **ɢᴀɪɴ:** `{old_config['gain']}` → `{audio_config['gain']}` ✅
 
 ────────────────────
-⚙️ **ꜰᴇᴀᴛᴜʀᴇꜱ**
-• ᴄᴏᴍᴘʀᴇꜱꜱᴏʀ: {'✅ ᴇɴᴀʙʟᴇᴅ' if audio_config['compressor'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
+⚙️ **ꜰᴇᴀᴛᴜʀᴇ��**
+• ᴄᴏᴍᴘʀᴇꜱꜱᴏ��: {'✅ ᴇɴᴀʙʟᴇᴅ' if audio_config['compressor'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
 • ʟɪᴍɪᴛᴇʀ: {'✅ ᴇɴᴀʙʟᴇᴅ' if audio_config['limiter'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
 • ʜɪɢʜᴘᴀꜱꜱ: {'✅ ᴇɴᴀʙʟᴇᴅ' if audio_config['highpass'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
 • ʟᴏᴡᴘᴀꜱꜱ: {'✅ ᴇɴᴀʙʟᴇᴅ' if audio_config['lowpass'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
@@ -2530,6 +2967,7 @@ async def cmd_status(client, message):
 📡 **ꜱᴏᴜʀᴄᴇ:** `{RECORD_SOURCE}`
 🔊 **ᴀᴜᴅɪᴏ:** {audio_status}
 📤 **ꜰᴏʀᴡᴀʀᴅɪɴɢ:** {forward_count} ᴄʜᴀᴛꜱ
+🖥️ **ᴠɪᴅᴇᴏ ʀᴇʟᴀʏ:** {('🟢 on ' + str(len(video_relay))) if video_relay else '🔴 off'}
 ⏱️ **ᴜᴘᴛɪᴍᴇ:** `{get_uptime()}`
 ────────────────────
 
@@ -2605,7 +3043,8 @@ async def cmd_setrecordgroup(client, message):
         
         status_msg = await message.reply(f"🔄 **ᴄʜᴀɴɢɪɴɢ ꜱᴏᴜʀᴄᴇ ꜰʀᴏᴍ `{old_source}` ᴛᴏ `{new_source}`...**")
         
-        # Agar recording active hai toh stop karein
+        # Agar recording active hai toh stop karein (state yaad rakho taaki naye source pe rejoin ho)
+        was_recording = is_recording
         if is_recording:
             try:
                 await call_py.leave_call(old_source)
@@ -2619,7 +3058,7 @@ async def cmd_setrecordgroup(client, message):
         save_state()
         
         # Agar recording active thi toh naye source mein join karein
-        if is_recording:
+        if was_recording:
             success, error = await join_call_safe(new_source)
             if success:
                 await call_py.record(new_source, RecordStream(True, AUDIO_PARAMETERS))
@@ -2656,15 +3095,126 @@ async def cmd_setrecordgroup(client, message):
         
 # ==================== ʀᴇꜱᴛᴀʀᴛ ᴄᴏᴍᴍᴀɴᴅ ====================
 
+# ==================== ꜱᴇᴛ ꜱᴇꜱꜱɪᴏɴ ᴄᴏᴍᴍᴀɴᴅ ====================
+
+@bot_app.on_message(pyro_filters.command("setsession") & pyro_filters.user(OWNER_ID))
+async def cmd_setsession(client, message):
+    """STRING_SESSION update karo: verify -> persist -> full restart (re-exec)."""
+    parts = message.text.split(None, 1)
+    if len(parts) < 2 or not parts[1].strip():
+        await message.reply(
+            "📋 **ᴜꜱᴀɢᴇ:** `/setsession <STRING_SESSION>`\n\n"
+            "⚠️ Naya Pyrogram STRING_SESSION do. Verify hone ke baad save karke bot restart ho jayega."
+        )
+        return
+
+    new_session = parts[1].strip()
+    if len(new_session) < 50 or any(c.isspace() for c in new_session):
+        await message.reply("❌ Ye valid STRING_SESSION nahi lag raha (bahut chhota ya spaces hain).")
+        return
+
+    # 🔒 security: chat se raw session message hata do taaki leak na ho
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    status = await client.send_message(
+        message.chat.id, "🔎 **ɴᴇᴡ ꜱᴇꜱꜱɪᴏɴ ᴠᴇʀɪꜰʏ ʜᴏ ʀᴀʜᴀ ʜᴀɪ...**"
+    )
+
+    # naya session ek throwaway client se connect karke verify karo
+    test_client = Client(
+        "setsession_verify_tmp",
+        api_id=API_ID,
+        api_hash=API_HASH,
+        session_string=new_session,
+        in_memory=True,
+    )
+    try:
+        await test_client.start()
+        _me = await test_client.get_me()
+        who = _me.first_name or str(_me.id)
+        try:
+            await test_client.stop()
+        except Exception:
+            pass
+    except Exception as e:
+        try:
+            await test_client.stop()
+        except Exception:
+            pass
+        await status.edit_text(
+            f"❌ **ꜱᴇꜱꜱɪᴏɴ ᴠᴇʀɪꜰʏ ꜰᴀɪʟ:** `{str(e)[:250]}`\n\nPurana session hi chalu rahega."
+        )
+        return
+
+    # persist: pehle current runtime state, phir naya string_session merge
+    try:
+        save_state()
+    except Exception:
+        pass
+    try:
+        try:
+            with open(STATE_FILE, "r") as _f:
+                _data = json.load(_f)
+        except Exception:
+            _data = {}
+        _data["string_session"] = new_session
+        _tmp = f"{STATE_FILE}.tmp"
+        with open(_tmp, "w") as _f:
+            json.dump(_data, _f, indent=2)
+        os.replace(_tmp, STATE_FILE)
+    except Exception as e:
+        await status.edit_text(f"❌ **ꜱᴇꜱꜱɪᴏɴ ꜱᴀᴠᴇ ꜰᴀɪʟ:** `{str(e)[:250]}`")
+        return
+
+    await status.edit_text(
+        f"✅ **ꜱᴇꜱꜱɪᴏɴ ᴜᴘᴅᴀᴛᴇᴅ** (account: `{who}`)\n\n"
+        "🔄 Bot ab naye session ke saath full restart ho raha hai...\n"
+        "Thodi der me wapas online aa jayega."
+    )
+    logger.info("🔑 STRING_SESSION updated via /setsession -> re-exec restart")
+
+    await asyncio.sleep(1)
+
+    # pytgcalls band karo (best effort)
+    try:
+        await call_py.stop()
+    except Exception:
+        pass
+
+    # ⚠️ purani .session file hata do warna pyrogram usi ko load karega (naya session ignore ho jayega)
+    for _sf_name in ("user_session_v5.session", "user_session_v5.session-journal"):
+        try:
+            if os.path.exists(_sf_name):
+                os.remove(_sf_name)
+        except Exception:
+            pass
+
+    # full process re-exec -> naya user_app naye STRING_SESSION se banega
+    try:
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+    except Exception as e:
+        logger.error(f"re-exec fail: {e}")
+        try:
+            await status.edit_text(
+                f"⚠️ Session save ho gaya par auto-restart fail: `{str(e)[:200]}`\nProcess manually restart karo (naya session next boot pe apply hoga)."
+            )
+        except Exception:
+            pass
+
+# ==================== ꜱᴇᴛ ꜱᴇꜱꜱɪᴏɴ ᴄᴏᴍᴍᴀɴᴅ ᴇɴᴅꜱ ====================
+
 @bot_app.on_message(pyro_filters.command("restart") & pyro_filters.user(OWNER_ID))
 async def cmd_restart(client, message):
     """ʀᴇꜱᴛᴀʀᴛ ᴛʜᴇ ʙᴏᴛ - ᴄʟᴇᴀɴ ᴀɴᴅ ʀᴇᴄᴏɴɴᴇᴄᴛ"""
-    global is_recording, is_muted, call_py, forward_chats, RECORD_SOURCE  # ← FIX: Added RECORD_SOURCE
+    global is_recording, is_muted, call_py, forward_chats, RECORD_SOURCE, is_screensharing  # ← FIX: Added RECORD_SOURCE
     
     try:
         status_msg = await message.reply(
             "🔄 **ʀᴇꜱᴛᴀʀᴛɪɴɢ ʙᴏᴛ...**\n\n"
-            "📡 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ ᴀʟʟ ᴄᴏɴɴᴇᴄᴛɪᴏɴꜱ..."
+            "📡 ᴄʟᴇᴀɴ��ɴɢ ᴜᴘ ᴀʟʟ ᴄᴏɴɴᴇᴄᴛɪᴏɴꜱ..."
         )
         
         # ===== 1. SAVE STATE =====
@@ -2701,6 +3251,8 @@ async def cmd_restart(client, message):
         is_recording = False
         is_muted = False  # ← NEW: Reset mute during restart
         forward_chats.clear()  # ← NEW: Clear forward chats during restart
+        video_relay.clear()  # video relay bhi band during restart
+        is_screensharing = False
         logger.info("🧹 ʀᴜɴᴛɪᴍᴇ ꜱᴛᴀᴛᴇ ᴄʟᴇᴀʀᴇᴅ")
         
         # ===== 4. STOP PYTGCALLS =====
@@ -2721,11 +3273,10 @@ async def cmd_restart(client, message):
             # Create new PyTgCalls instance
             call_py = PyTgCalls(user_app)
             
-            # ✅ FIX: Properly re-register the microphone stream handler
-            @call_py.on_update(pytg_filters.stream_frame(Direction.INCOMING, Device.MICROPHONE))
-            async def audio_forwarder_handler(_, update: StreamFrames):
-                """registered audio handler"""
-                await _forward_incoming_frames(update)
+            # ✅ FIX: Re-register the shared microphone stream handler on the new instance
+            call_py.on_update(
+                pytg_filters.stream_frame(Direction.INCOMING, Device.MICROPHONE)
+            )(audio_forwarder)
             
             # Start PyTgCalls
             await call_py.start()
@@ -2771,7 +3322,7 @@ async def cmd_restart(client, message):
             
             save_state()
             restart_success = True
-            logger.info(f"🔄 ʀᴇꜱᴛᴀʀᴛ ᴄᴏᴍᴘʟᴇᴛᴇ: ʀᴇᴄᴏʀᴅɪɴɢ={is_recording}, ꜰᴏʀᴡᴀʀᴅꜱ={len(forward_chats)}, ᴍᴜᴛᴇ={is_muted}")
+            logger.info(f"🔄 ʀᴇꜱᴛᴀʀᴛ ᴄᴏᴍᴘʟᴇᴛᴇ: ʀᴇᴄᴏʀᴅ��ɴɢ={is_recording}, ꜰᴏʀᴡᴀʀᴅꜱ={len(forward_chats)}, ᴍᴜᴛᴇ={is_muted}")
             
         except Exception as e:
             logger.error(f"ʀᴇꜱᴛᴀʀᴛ ᴘʏᴛɢᴄᴀʟʟꜱ ꜰᴀɪʟᴇᴅ: {e}")
@@ -2781,7 +3332,7 @@ async def cmd_restart(client, message):
         if restart_success:
             await status_msg.edit_text(
                 f"✅ **ʙᴏᴛ ʀᴇꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**\n\n"
-                f"📊 **ᴄʟᴇᴀɴᴇᴅ:** {left_count} ᴄʜᴀᴛꜱ\n"
+                f"�� **ᴄʟᴇᴀɴᴇᴅ:** {left_count} ᴄʜᴀᴛꜱ\n"
                 f"⚠️ **ꜰᴀɪʟᴇᴅ:** {failed_count} ᴄʜᴀᴛꜱ\n"
                 f"📡 **ꜱᴏᴜʀᴄᴇ:** `{RECORD_SOURCE}`\n"
                 f"📤 **ᴀᴄᴛɪᴠᴇ ꜰᴏʀᴡᴀʀᴅꜱ:** {len(forward_chats)}\n"
@@ -2794,8 +3345,8 @@ async def cmd_restart(client, message):
                 f"⚠️ **ᴘᴀʀᴛɪᴀʟ ʀᴇꜱᴛᴀʀᴛ - ᴄʜᴇᴄᴋ ʟᴏɢꜱ!**\n\n"
                 f"📊 **ᴄʟᴇᴀɴᴇᴅ:** {left_count} ᴄʜᴀᴛꜱ\n"
                 f"⚠️ **ꜰᴀɪʟᴇᴅ:** {failed_count} ᴄʜᴀᴛꜱ\n"
-                f"🛑 **ᴘʏᴛɢᴄᴀʟʟꜱ:** {'✅ ꜱᴛᴏᴘᴘᴇᴅ' if stop_success else '❌ ꜰᴀɪʟᴇᴅ'}\n"
-                f"🔄 **ʀᴇꜱᴛᴀʀᴛ:** {'✅ ꜱᴜᴄᴄᴇꜱꜱ' if restart_success else '❌ ꜰᴀɪʟᴇᴅ'}\n\n"
+                f"🛑 **ᴘʏᴛɢᴄᴀʟʟꜱ:** {'✅ ꜱᴛᴏᴘᴘᴇᴅ' if stop_success else '❌ ꜰᴀɪʟᴇ��'}\n"
+                f"🔄 **ʀ��ꜱᴛᴀʀᴛ:** {'✅ ꜱᴜᴄᴄᴇꜱꜱ' if restart_success else '❌ ꜰᴀɪʟᴇᴅ'}\n\n"
                 f"💡 ᴍᴀɴᴜᴀʟʟʏ ᴄʜᴇᴄᴋ ᴛʜᴇ ʙᴏᴛ ꜱᴛᴀᴛᴜꜱ"
             )
         
@@ -2896,7 +3447,7 @@ async def cmd_panel(client, message):
 
 @bot_app.on_callback_query(pyro_filters.regex(r"^panel_"))
 async def panel_callbacks(client, callback_query: CallbackQuery):
-    """ʜᴀɴᴅʟᴇ ᴀʟʟ panel_* ᴄᴀʟʟʙᴀᴄᴋ Qᴜᴇʀɪᴇꜱ ꜰʀᴏᴍ /panel"""
+    """ʜᴀ��ᴅʟᴇ ᴀʟʟ panel_* ᴄᴀʟʟʙᴀᴄᴋ Qᴜᴇʀɪᴇꜱ ꜰʀᴏᴍ /panel"""
     global is_muted, audio_config, RECORD_SOURCE  
     
     data = callback_query.data
@@ -2960,14 +3511,14 @@ async def panel_callbacks(client, callback_query: CallbackQuery):
     
     # ===== BASS CONTROLS =====
     elif data == "panel_bass_up":
-        audio_config['bass'] = min(60, audio_config['bass'] + 60)
+        audio_config['bass'] = min(60, audio_config['bass'] + 10)
         audio_config['highpass'] = audio_config['bass'] > 0
         save_state()
         await callback_query.answer(f"🎸 ʙᴀꜱꜱ: {audio_config['bass']}/60", show_alert=True)
         await refresh_panel(client, callback_query)
     
     elif data == "panel_bass_down":
-        audio_config['bass'] = max(0, audio_config['bass'] - 30)
+        audio_config['bass'] = max(0, audio_config['bass'] - 10)
         audio_config['highpass'] = audio_config['bass'] > 0
         save_state()
         await callback_query.answer(f"🎸 ʙᴀꜱꜱ: {audio_config['bass']}/60", show_alert=True)
@@ -2975,26 +3526,26 @@ async def panel_callbacks(client, callback_query: CallbackQuery):
     
     # ===== TREBLE CONTROLS =====
     elif data == "panel_treble_up":
-        audio_config['treble'] = min(60, audio_config['treble'] + 60)
+        audio_config['treble'] = min(60, audio_config['treble'] + 10)
         save_state()
         await callback_query.answer(f"🎵 ᴛʀᴇʙʟᴇ: {audio_config['treble']}/60", show_alert=True)
         await refresh_panel(client, callback_query)
     
     elif data == "panel_treble_down":
-        audio_config['treble'] = max(0, audio_config['treble'] - 30)
+        audio_config['treble'] = max(0, audio_config['treble'] - 10)
         save_state()
         await callback_query.answer(f"🎵 ᴛʀᴇʙʟᴇ: {audio_config['treble']}/60", show_alert=True)
         await refresh_panel(client, callback_query)
     
     # ===== GAIN CONTROLS =====
     elif data == "panel_gain_up":
-        audio_config['gain'] = min(60, audio_config['gain'] + 60)
+        audio_config['gain'] = min(60, audio_config['gain'] + 5)
         save_state()
         await callback_query.answer(f"📈 ɢᴀɪɴ: {audio_config['gain']}/60", show_alert=True)
         await refresh_panel(client, callback_query)
     
     elif data == "panel_gain_down":
-        audio_config['gain'] = max(0, audio_config['gain'] - 30)
+        audio_config['gain'] = max(0, audio_config['gain'] - 5)
         save_state()
         await callback_query.answer(f"📈 ɢᴀɪɴ: {audio_config['gain']}/60", show_alert=True)
         await refresh_panel(client, callback_query)
@@ -3003,10 +3554,10 @@ async def panel_callbacks(client, callback_query: CallbackQuery):
     elif data == "panel_reset":
         # ✅ FIX: Use .update() instead of reassigning
         audio_config.update({
-            'volume': 200,
+            'volume': 100,
             'bass': 0,
             'treble': 0,
-            'gain': 15,
+            'gain': 0,
             'compressor': True,
             'limiter': True,
             'highpass': False,
@@ -3143,6 +3694,208 @@ async def refresh_panel(client, callback_query: CallbackQuery):
 
 # ==================== ᴘᴀɴᴇʟ ᴄᴏᴍᴍᴀɴᴅ ᴇɴᴅꜱ ====================
         
+# ==================== ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ ᴄᴏᴍᴍᴀɴᴅ ====================
+# Teeno video commands (screenshare / camera / screencamera) ek hi generic
+# relay engine use karte hain. Har mode ka apna ffmpeg pattern hai. VC me ek
+# waqt par ek hi video track hota hai, isliye kisi chat me naya mode on karne
+# par purana mode replace ho jaata hai. AUDIO hamesha EXTERNAL (send_frame) ->
+# audio-forwarding kabhi disturb nahi hoti.
+
+def ensure_video(mode):
+    """Us mode ka test-pattern video ek baar bana lo. True agar file ready hai.
+    ffmpeg VPS pe zaroori. Audio nahi (-an) kyunki audio hamesha external hai."""
+    cfg = VIDEO_MODES[mode]
+    path = cfg["file"]
+    if os.path.exists(path):
+        return True
+    try:
+        cmd = (
+            ["ffmpeg", "-y"]
+            + cfg["ff_inputs"]
+            + cfg["ff_filter"]
+            + ["-t", "3600", "-c:v", "libx264", "-preset", "ultrafast",
+               "-pix_fmt", "yuv420p", "-an", path]
+        )
+        subprocess.run(
+            cmd, check=True, timeout=180,
+            stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL,
+        )
+        return os.path.exists(path)
+    except Exception as e:
+        logger.error(f"video pattern error ({mode}): {e}")
+        return False
+
+
+def _video_stream(mode):
+    """VIDEO = us mode ka pattern file, AUDIO = EXTERNAL (send_frame)."""
+    return MediaStream(
+        VIDEO_MODES[mode]["file"],
+        audio_parameters=AUDIO_PARAMETERS,
+        audio_path=ExternalMedia.AUDIO,
+    )
+
+
+async def _restore_audio_only(chat):
+    """Chat wapas pure audio-only external stream pe -> forwarding alive."""
+    await call_py.play(chat, MediaStream(ExternalMedia.AUDIO, AUDIO_PARAMETERS))
+
+
+async def _video_on(target, mode):
+    """Diye gaye mode ka video track lagao. Fail hone par TURANT audio-only pe
+    wapas -> audio-forwarding kabhi na tute."""
+    loop = asyncio.get_running_loop()
+    ready = await loop.run_in_executor(None, ensure_video, mode)
+    if not ready:
+        return False, "video generate nahi hua (ffmpeg -version check karo)"
+    try:
+        await cache_chat_info(target)
+        await call_py.play(target, _video_stream(mode))
+        video_relay[target] = mode
+        return True, None
+    except NoActiveGroupCall:
+        return False, "no active voice chat"
+    except Exception as e:
+        msg = str(e)
+        if "already" in msg.lower():
+            video_relay[target] = mode
+            return True, None
+        try:
+            await _restore_audio_only(target)
+        except Exception:
+            pass
+        video_relay.pop(target, None)
+        return False, msg
+
+
+async def _video_off(target):
+    """Video hata do -> wapas audio-only external stream. Forwarding continue."""
+    try:
+        await _restore_audio_only(target)
+    except Exception as e:
+        logger.debug(f"video off issue {target}: {e}")
+    video_relay.pop(target, None)
+
+
+def _video_targets_on():
+    """Video kin chats pe: saare forward chats (+ source agar recording on)."""
+    targets = list(forward_chats)
+    if is_recording and RECORD_SOURCE not in targets:
+        targets.append(RECORD_SOURCE)
+    return targets
+
+
+async def _handle_video_command(message, mode, cmd_name):
+    """Shared handler: /screenshare, /camera, /screencamera -- on|off [chat_id].
+    Bina arg = status. mode = 'screen' | 'camera' | 'screencamera'."""
+    global is_screensharing
+    NL = chr(10)
+    label = VIDEO_MODES[mode]["label"]
+    parts = message.text.split()
+
+    if len(parts) < 2 or parts[1].lower() not in ("on", "off"):
+        active = [c for c, m in video_relay.items() if m == mode]
+        if active:
+            lines = NL.join(f"• `{c}`" for c in active)
+            await message.reply(
+                f"""{label} **STATUS**
+
+🟢 **ON** — {len(active)} chat(s):
+{lines}
+
+`/{cmd_name} off` — sab band"""
+            )
+        else:
+            await message.reply(
+                f"""{label} **STATUS**
+
+🔴 **OFF** — koi video active nahi
+
+`/{cmd_name} on` — sab forward chats me on
+`/{cmd_name} on <chat_id>` — kisi ek chat me"""
+            )
+        return
+
+    mode_arg = parts[1].lower()
+
+    manual_target = None
+    if len(parts) >= 3:
+        cid = re.sub(r'[^\d-]', '', parts[2])
+        if cid:
+            try:
+                manual_target = int(cid)
+            except ValueError:
+                await message.reply("❌ galat chat id")
+                return
+
+    if mode_arg == "on":
+        targets = [manual_target] if manual_target is not None else _video_targets_on()
+        if not targets:
+            await message.reply(
+                f"""⚠️ **koi target nahi!**
+
+pehle koi forward chat add karo ya recording on karo,
+ya `/{cmd_name} on <chat_id>` do."""
+            )
+            return
+        status_msg = await message.reply(f"🔄 **{label} on kar raha hu...**")
+        ok_count, fails = 0, []
+        for t in targets:
+            ok, err = await _video_on(t, mode)
+            if ok:
+                ok_count += 1
+            else:
+                fails.append(f"`{t}`: {err}")
+        is_screensharing = bool(video_relay)
+        active = [c for c, m in video_relay.items() if m == mode]
+        text = (
+            f"""✅ **{label} ON!**
+
+🎥 **video active:** {len(active)} chat(s)
+🎯 **abhi on hua:** {ok_count}/{len(targets)}
+🔊 audio-forwarding waise hi chal rahi hai"""
+        )
+        if fails:
+            text += NL + NL + "⚠️ **fail:**" + NL + NL.join(fails[:5])
+            text += NL + "💡 fail chats ka voice chat on hona chahiye"
+        await status_msg.edit_text(text)
+        logger.info(f"{cmd_name} on: {ok_count}/{len(targets)} ok, active={len(active)}")
+    else:
+        if manual_target is not None:
+            targets = [manual_target]
+        else:
+            targets = [c for c, m in list(video_relay.items()) if m == mode]
+        if not targets:
+            await message.reply(f"🔴 {label} pehle se hi off hai")
+            return
+        for t in targets:
+            await _video_off(t)
+        is_screensharing = bool(video_relay)
+        await message.reply(
+            f"""🛑 **{label} OFF!**
+
+🎥 **abhi bhi video on:** {len(video_relay)} chat(s)
+🔊 audio-forwarding continue"""
+        )
+
+
+@bot_app.on_message(pyro_filters.command("screenshare") & authorized_only())
+async def cmd_screenshare(client, message):
+    """/screenshare on|off [chat_id] -- SCREEN relay toggle."""
+    await _handle_video_command(message, "screen", "screenshare")
+
+
+@bot_app.on_message(pyro_filters.command("camera") & authorized_only())
+async def cmd_camera(client, message):
+    """/camera on|off [chat_id] -- CAMERA relay toggle."""
+    await _handle_video_command(message, "camera", "camera")
+
+
+@bot_app.on_message(pyro_filters.command("screencamera") & authorized_only())
+async def cmd_screencamera(client, message):
+    """/screencamera on|off [chat_id] -- SCREEN + CAMERA dono relay toggle."""
+    await _handle_video_command(message, "screencamera", "screencamera")
+
+
 # ==================== MAIN ====================
 
 if __name__ == "__main__":
@@ -3152,8 +3905,8 @@ if __name__ == "__main__":
     # Print startup banner
     print("🎵 ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅᴇʀ ᴠ5 - ᴄᴏᴍᴘʟᴇᴛᴇ ꜰɪxᴇᴅ ᴠᴇʀꜱɪᴏɴ")
     print("✅ ᴄᴀᴄʜᴇ-ꜰɪʀꜱᴛ ᴀᴘᴘʀᴏᴀᴄʜ ᴡɪᴛʜ ᴇʀʀᴏʀ ʜᴀɴᴅʟɪɴɢ")
-    print("✅ ꜰᴜʟʟ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ꜱᴜᴘᴘᴏʀᴛ")
-    print("✅ ᴜꜱᴇʀ ᴀᴘᴘʀᴏᴠᴀʟ ꜱʏꜱᴛᴇᴍ - ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ ꜰᴏʀ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ")
+    print("✅ ꜰᴜʟʟ ᴀᴜᴅɪᴏ ᴇꜰ��ᴇᴄᴛꜱ ꜱᴜᴘ���ᴏʀᴛ")
+    print("✅ ᴜꜱᴇʀ ᴀᴘᴘʀᴏᴠᴀʟ ꜱʏꜱᴛᴇᴍ - ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ ꜰᴏʀ ᴜ��ᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ")
     print()
     
     # Check SciPy availability
@@ -3171,14 +3924,14 @@ if __name__ == "__main__":
         # Start PyTgCalls (with fallback)
         try:
             call_py.start()
-            print("✅ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
+            print("✅ ᴘʏᴛɢᴄᴀʟʟ��� ꜱᴛᴀʀᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ")
         except Exception as e:
             print(f"⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛ ꜰᴀɪʟᴇᴅ (User session error): {e}")
             print("   ʙᴏᴛ ᴡɪʟʟ ꜱᴛɪʟʟ ʀᴜɴ ꜰᴏʀ ʙᴏᴛ ᴄᴏᴍᴍᴀɴᴅꜱ!\n")
         
         # Print help/status
         print("\n✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
-        print("📌 ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ")
+        print("📌 ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ, /ꜱᴇᴛꜱᴇꜱꜱɪᴏɴ")
         print("📌 ᴀᴜᴅɪᴏ ᴄᴏᴍᴍᴀɴᴅꜱ: /ʟᴇᴠᴇʟ, /ʙᴀꜱꜱ, /ᴛʀᴇʙʟᴇ, /ɢᴀɪɴ, /ᴇꜰꜰᴇᴄᴛꜱ")
         print("📌 ᴇxᴛʀᴀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ, /panel")
         print("⚠️ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ ɢᴇᴛ ɴᴏ ʀᴇꜱᴘᴏɴꜱᴇ (ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ)\n")
@@ -3195,25 +3948,56 @@ if __name__ == "__main__":
     finally:
         # ==================== CLEANUP ====================
         print("\n🧹 ᴄʟᴇᴀɴɪɴɢ ᴜᴘ...")
+
+        # --- Safe async cleanup helper (leave_call/stop coroutines hain, bina await ke chalte nahi the) ---
+        try:
+            _loop = user_app.loop
+        except Exception:
+            _loop = None
+        if _loop is None:
+            try:
+                _loop = asyncio.get_event_loop()
+            except Exception:
+                _loop = None
+
+        def _run(coro):
+            """Await a cleanup coroutine safely from this sync finally block."""
+            try:
+                if _loop is None:
+                    return None
+                if _loop.is_running():
+                    return asyncio.run_coroutine_threadsafe(coro, _loop).result(timeout=30)
+                return _loop.run_until_complete(coro)
+            except Exception as _ex:
+                print(f"    ᴄʟᴇᴀɴᴜᴘ ᴀᴡᴀɪᴛ ᴇʀʀᴏʀ: {_ex}")
+                return None
+        
+        # Leave all screenshare chats
+        for chat in list(video_relay):
+            try:
+                _run(call_py.leave_call(chat))
+                print(f"    ʟᴇꝰᴛ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ: {chat}")
+            except Exception as e:
+                print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ ꜱᴄʀᴇᴇɴꜱʜᴀʀᴇ {chat}: {e}")
         
         # Leave all forward chats
         for chat in list(forward_chats):
             try:
-                call_py.leave_call(chat)
+                _run(call_py.leave_call(chat))
                 print(f"    ʟᴇꜰᴛ ᴄʜᴀᴛ: {chat}")
             except Exception as e:
                 print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ {chat}: {e}")
         
         # Leave source chat
         try:
-            call_py.leave_call(RECORD_SOURCE)
+            _run(call_py.leave_call(RECORD_SOURCE))
             print(f"    ʟᴇꜰᴛ ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}")
         except Exception as e:
             print(f"    ᴄᴏᴜʟᴅɴ'ᴛ ʟᴇᴀᴠᴇ ꜱᴏᴜʀᴄᴇ: {e}")
         
         # Stop PyTgCalls
         try:
-            call_py.stop()
+            _run(call_py.stop())
             print("    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘᴘᴇᴅ")
         except Exception as e:
             print(f"    ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴏᴘ ᴇʀʀᴏʀ: {e}")
