@@ -31,6 +31,7 @@ try:
     SCIPY_AVAILABLE = True
 except Exception:
     SCIPY_AVAILABLE = False
+    signal = None  # fallback: no scipy available
     print("⚠️ ꜱᴄɪᴘʏ ʟᴏᴀᴅ ꜰᴀɪʟᴇᴅ - ʙᴀꜱɪᴄ ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ ᴏɴʟʏ")
 
 from pyrogram import Client, filters as pyro_filters
@@ -58,10 +59,11 @@ API_ID = 29177322
 API_HASH = "1b8573accde3d0b7c35e43cdbb36e523"
 BOT_TOKEN = "8592205626:AAFgX1hhm8WmWym6hjU5AAVxYq8gclUo1ac"
 OWNER_ID = 8305984975
-STRING_SESSION = "BQG9NeoAKgnwMUVxrdLuZqchTSFQaiKJpPuSYhmG29j15hA7BHwFt5-BlIbFOhO4aY6NHKSgdeqp6FmGtIk0_6Aao11efgSUBx23sbDiFj-1Wq2YyZnnUteWe7ao5tienj13NGwYnrxb3pbQpFMeQFwGhtfUzXbVTgiVT4KD3xks7bFfeA_bpkuM50WEs_4yB9KFzsLQZ99oirkxmUXe8r9DDiXKvpkppPKO50Np6gArSQ_MUI7f5sxW9RMNl6YwJYfI837hkPIjFL9ZkgqG2KXV-wCai93e5bR2K_zPS6vh6rZ8RCv_mfjtjaf0hDpsx4Eh7FDgWmWk2VNGcGUdz3ODozAE4QAAAAIJm0jrAA"
+STRING_SESSION = "BQG9NeoAr6eKEq3cJyC05tt8JAzrnPCvGxiwC8ERAV3u7kNTvhdG0smaeYN8m7MGx279MaA8EtiXDI_EvJmInddi8kNwvy7aXP5_dvpYrTc9j94Adv8q0a0giRAEYf80xT2XRkV2DFUeW1zYuFfzSejYaZxdGdIG4FaMKPq-T-bmpcFCw7lxf3ayPwIp45hKlCVSSX_nD9uRHCjloZ9EbWgzwo-WWRHANFCeEnec0YQH4-1PG3MVI7XDkSlkpAiHF_YeIhD-bcmHIpSgSdSu3R74bVfdV3gNsTFeYCvNhWvBJD8WNOdSJZfQ3EHuqD9VV0N2E-TUAFwh06HJx_hhonqVjmz5aQAAAAIJm0jrAA"
 RECORD_GROUP = -1003970175858
 # ======================================================
 
+from datetime import datetime
 logging.basicConfig(level=logging.INFO, format='%(asctime)s - %(levelname)s - %(message)s')
 logger = logging.getLogger(__name__)
 
@@ -72,8 +74,12 @@ logging.getLogger("pytgcalls").setLevel(logging.WARNING)
 AUDIO_CHANNELS = 2
 AUDIO_PARAMETERS = AudioParameters(bitrate=48000, channels=AUDIO_CHANNELS)
 
+# Session file constants - central filenames
+BOT_SESSION_NAME = "bot_session_v5"
+USER_SESSION_NAME = "user_session_v5"
+
 # ==================== ᴄʟɪᴇɴᴛꜱ ====================
-bot_app = Client("bot_session_v5", api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
+bot_app = Client(BOT_SESSION_NAME, api_id=API_ID, api_hash=API_HASH, bot_token=BOT_TOKEN)
 try:
     with open("bot_state.json", "r") as _sf:
         _saved_sess = json.load(_sf).get("string_session")
@@ -83,7 +89,7 @@ try:
 except Exception:
     pass
 
-user_app = Client("user_session_v5", api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
+user_app = Client(USER_SESSION_NAME, api_id=API_ID, api_hash=API_HASH, session_string=STRING_SESSION)
 call_py = PyTgCalls(user_app)
 
 # ==================== ꜱᴛᴀᴛᴇ ====================
@@ -155,6 +161,7 @@ def save_state():
                 "forward_chats": sorted(forward_chats),
                 "auto_mute_enabled": auto_mute_enabled,
                 "is_muted": is_muted,
+                "video_relay": {str(k): v for k, v in video_relay.items()},
             }, f, indent=2)
         os.replace(tmp, STATE_FILE)
     except Exception as e:
@@ -184,6 +191,10 @@ def load_state():
         
         auto_mute_enabled = data.get("auto_mute_enabled", False)
         is_muted = data.get("is_muted", False)
+
+        saved_video_relay = data.get("video_relay")
+        if isinstance(saved_video_relay, dict):
+            video_relay.update({int(k): v for k, v in saved_video_relay.items()})
         
         logger.info(f"ʟᴏᴀᴅᴇᴅ ꜱᴛᴀᴛᴇ: {len(approved_users)} ᴀᴘᴘʀᴏᴠᴇᴅ ᴜꜱᴇʀ(ꜱ), ꜱᴏᴜʀᴄᴇ: {RECORD_SOURCE}, ᴍᴜᴛᴇᴅ: {is_muted}")
     except FileNotFoundError:
@@ -215,7 +226,7 @@ def escape_markdown(text):
     return "".join("\\" + c if c in specials else c for c in text)
 
 def get_uptime():
-    """ɢᴇᴛ ʙᴏᴛ ᴜᴘᴛɪᴍᴇ"""
+    """ɢᴇᴛ ʙᴏᴛ ᴜᴘ��ɪᴍᴇ"""
     uptime_seconds = int(time.time() - bot_start_time)
     days = uptime_seconds // 86400
     hours = (uptime_seconds % 86400) // 3600
@@ -255,6 +266,49 @@ def get_effect_status(value, max_val):
 
 
 # ==================== ᴀᴜᴅɪᴏ ᴘʀᴏᴄᴇꜱꜱɪɴɢ ====================
+
+# ---- STREAMING FILTER STATE (glitch-free continuous audio) ----
+# Audio 20ms frames me aata hai. Agar har frame pe IIR filter ki memory (zi)
+# zero se start ho to har frame boundary pe click/pop aata hai + coeffs baar
+# baar recompute hote hain (CPU waste). Isliye hum:
+#   1) filter coefficients cache karte hain (sirf config badle to recompute)
+#   2) per-channel filter delay-state (zi) yaad rakhte hain -> smooth stream
+_FILTER_ZI = {}      # key -> zf (pichhle frame ki filter memory)
+_COEFF_CACHE = {}    # key -> (signature, b, a)
+
+
+def reset_filter_states():
+    """Naya stream / rejoin pe purani filter memory clear karo."""
+    _FILTER_ZI.clear()
+
+
+def _cached_coeffs(key, signature, builder):
+    """Filter coeffs cache: sirf tab recompute jab signature (config) badle."""
+    cached = _COEFF_CACHE.get(key)
+    if cached is not None and cached[0] == signature:
+        return cached[1], cached[2]
+    b, a = builder()
+    b = np.asarray(b, dtype=np.float64)
+    a = np.asarray(a, dtype=np.float64)
+    _COEFF_CACHE[key] = (signature, b, a)
+    return b, a
+
+
+def _stream_lfilter(key, b, a, x):
+    """lfilter jo pichhle frame ki state carry karta hai (continuous stream)."""
+    need = max(len(a), len(b)) - 1
+    zi = _FILTER_ZI.get(key)
+    if zi is None or len(zi) != need:
+        # Pehle frame pe steady-state se seed -> shuruaat me bhi click nahi
+        try:
+            seed = float(x[0]) if len(x) else 0.0
+            zi = signal.lfilter_zi(b, a) * seed
+        except Exception:
+            zi = np.zeros(need, dtype=np.float64)
+    y, zf = signal.lfilter(b, a, x, zi=zi)
+    _FILTER_ZI[key] = zf
+    return y
+
 
 def apply_volume_boost(audio_data, level):
     """ᴜʟᴛɪᴍᴀᴛᴇ ᴠᴏʟᴜᴍᴇ - ᴍᴀx ʟᴏᴜᴅɴᴇꜱꜱ ᴡɪᴛʜᴏᴜᴛ ᴄʟɪᴘᴘɪɴɢ"""
@@ -307,45 +361,49 @@ def apply_bass_boost_basic(audio_data, bass_level):
     
     return np.clip(processed, -32768, 32767).astype(np.int16)
 
-def apply_bass_boost_advanced(audio_data, bass_level, sample_rate=48000):
-    """ᴘʀᴏꜰᴇꜱꜱɪᴏɴᴀʟ ʙᴀꜱꜱ - ꜱᴛᴜᴅɪᴏ Qᴜᴀʟɪᴛʏ"""
+def apply_bass_boost_advanced(audio_data, bass_level, sample_rate=48000, channel="M"):
+    """ᴘʀᴏꜰᴇꜱꜱɪᴏɴᴀʟ ʙᴀꜱꜱ - ꜱᴛᴜᴅɪᴏ Qᴜᴀʟɪᴛʏ (streaming, glitch-free)"""
     if bass_level == 0:
         return audio_data
     
     try:
-        # ʜɪɢʜᴇʀ ꜰʀᴇQ = ᴛɪɢʜᴛᴇʀ ʙᴀꜱꜱ
-        f0 = 60 + (bass_level * 0.15)
-        Q = 0.5
-        gain_db = bass_level / 4
-        
-        w0 = 2 * np.pi * f0 / sample_rate
-        A = 10 ** (gain_db / 40)
-        cos_w0 = np.cos(w0)
-        sin_w0 = np.sin(w0)
-        alpha = sin_w0 / (2 * Q)
-        
-        b0 = A * ((A + 1) + (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha)
-        b1 = -2 * A * ((A - 1) + (A + 1) * cos_w0)
-        b2 = A * ((A + 1) + (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha)
-        a0 = (A + 1) - (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha
-        a1 = 2 * ((A - 1) - (A + 1) * cos_w0)
-        a2 = (A + 1) - (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha
-        
-        b = np.array([b0, b1, b2]) / a0
-        a = np.array([1, a1 / a0, a2 / a0])
-        
-        filtered = signal.lfilter(b, a, audio_data.astype(np.float32))
-        
+        def _build():
+            # ʜɪɢʜᴇʀ ꜰʀᴇQ = ᴛɪɢʜᴛᴇʀ ʙᴀꜱꜱ
+            f0 = 60 + (bass_level * 0.15)
+            Q = 0.5
+            gain_db = bass_level / 4
+
+            w0 = 2 * np.pi * f0 / sample_rate
+            A = 10 ** (gain_db / 40)
+            cos_w0 = np.cos(w0)
+            sin_w0 = np.sin(w0)
+            alpha = sin_w0 / (2 * Q)
+
+            b0 = A * ((A + 1) + (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha)
+            b1 = -2 * A * ((A - 1) + (A + 1) * cos_w0)
+            b2 = A * ((A + 1) + (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha)
+            a0 = (A + 1) - (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha
+            a1 = 2 * ((A - 1) - (A + 1) * cos_w0)
+            a2 = (A + 1) - (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha
+
+            return np.array([b0, b1, b2]) / a0, np.array([1, a1 / a0, a2 / a0])
+
+        b, a = _cached_coeffs(f"bass:{channel}", (bass_level, sample_rate), _build)
+        filtered = _stream_lfilter(f"bass:{channel}", b, a, audio_data.astype(np.float32))
+
         # ʀᴇᴍᴏᴠᴇ ꜱᴜʙ-ʙᴀꜱꜱ (ɴᴏ ꜰᴀᴛ)
         if bass_level > 15:
-            b_hp, a_hp = signal.butter(2, 40 / (sample_rate / 2), btype='high')
-            filtered = signal.lfilter(b_hp, a_hp, filtered)
-        
+            b_hp, a_hp = _cached_coeffs(
+                f"bass_hp:{channel}", sample_rate,
+                lambda: signal.butter(2, 40 / (sample_rate / 2), btype='high'),
+            )
+            filtered = _stream_lfilter(f"bass_hp:{channel}", b_hp, a_hp, filtered)
+
         # ᴄʟᴇᴀɴ ᴄʟɪᴘᴘɪɴɢ
         filtered = 32000.0 * np.tanh(filtered / 32000.0)
-        
+
         return np.clip(filtered, -32768, 32767).astype(np.int16)
-        
+
     except Exception as e:
         logger.error(f"ʙᴀꜱꜱ ᴀᴅᴠᴀɴᴄᴇᴅ ᴇʀʀᴏʀ: {e}")
         return apply_bass_boost_basic(audio_data, bass_level)
@@ -374,8 +432,8 @@ def apply_treble_boost_basic(audio_data, treble_level):
 
     return np.clip(processed, -32768, 32767).astype(np.int16)
 
-def apply_treble_boost_advanced(audio_data, treble_level, sample_rate=48000):
-    """ᴀᴅᴠᴀɴᴄᴇᴅ ᴛʀᴇʙʟᴇ ʙᴏᴏꜱᴛ ᴡɪᴛʜ ꜱᴄɪᴘʏ"""
+def apply_treble_boost_advanced(audio_data, treble_level, sample_rate=48000, channel="M"):
+    """ᴀᴅᴠᴀɴᴄᴇᴅ ᴛʀᴇʙʟᴇ ʙᴏᴏꜱᴛ ᴡɪᴛʜ ꜱᴄɪᴘʏ (streaming, glitch-free)"""
     if treble_level == 0:
         return audio_data
     try:
@@ -393,9 +451,8 @@ def apply_treble_boost_advanced(audio_data, treble_level, sample_rate=48000):
         a0 = (A + 1) + (A - 1) * cos_w0 + 2 * np.sqrt(A) * alpha
         a1 = -2 * ((A - 1) + (A + 1) * cos_w0)
         a2 = (A + 1) + (A - 1) * cos_w0 - 2 * np.sqrt(A) * alpha
-        b = np.array([b0, b1, b2]) / a0
-        a = np.array([1, a1 / a0, a2 / a0])
-        filtered = signal.lfilter(b, a, audio_data.astype(np.float32))
+        b, a = _cached_coeffs(f"treble:{channel}", (treble_level, sample_rate), lambda: (np.array([b0, b1, b2]) / a0, np.array([1, a1 / a0, a2 / a0])))
+        filtered = _stream_lfilter(f"treble:{channel}", b, a, audio_data.astype(np.float32))
         return np.clip(filtered, -32768, 32767).astype(np.int16)
     except Exception as e:
         logger.error(f"ᴀᴅᴠᴀɴᴄᴇᴅ ᴛʀᴇʙʟᴇ ᴇʀʀᴏʀ: {e}")
@@ -460,21 +517,22 @@ def process_audio(audio_data):
         # Stereo frames are interleaved L,R,L,R... -> filter each channel on its own
         if AUDIO_CHANNELS == 2 and audio_data.ndim == 1 and len(audio_data) % 2 == 0:
             stereo = audio_data.reshape(-1, 2)
-            left = _process_mono_chain(stereo[:, 0].copy())
-            right = _process_mono_chain(stereo[:, 1].copy())
+            left = _process_mono_chain(stereo[:, 0].copy(), channel="L")
+            right = _process_mono_chain(stereo[:, 1].copy(), channel="R")
             n = min(len(left), len(right))
             out = np.empty((n, 2), dtype=np.int16)
             out[:, 0] = left[:n]
             out[:, 1] = right[:n]
             return out.reshape(-1)
-        return _process_mono_chain(audio_data)
+        return _process_mono_chain(audio_data, channel="M")
     except Exception as e:
         logger.error(f"ᴀᴜᴅɪᴏ ᴅɪꜱᴘᴀᴛᴄʜ ᴇʀʀᴏʀ: {e}")
         return audio_data
 
 
-def _process_mono_chain(audio_data):
-    """ᴀᴘᴘʟʏ ᴀʟʟ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ɪɴ ᴄʜᴀɪɴ (HPF → Bass → Gain → Volume → Treble → LPF)"""
+def _process_mono_chain(audio_data, channel="M"):
+    """ᴀᴘᴘʟʏ ᴀʟʟ ᴀᴜᴅɪᴏ ᴇꜰꜰᴇᴄᴛꜱ ɪɴ ᴄʜᴀɪɴ (HPF → Bass → Gain → Volume → Treble → LPF)
+    channel = "L"/"R"/"M" -> har channel ka apna filter-state (stereo bleed nahi)."""
 
     if audio_data is None or len(audio_data) == 0:
         return audio_data
@@ -486,8 +544,11 @@ def _process_mono_chain(audio_data):
         # ===== 1. HIGH-PASS FILTER (Remove low rumble first) =====
         if config.get('highpass', False) and SCIPY_AVAILABLE:
             try:
-                b, a = signal.butter(2, 80 / 24000, btype='high')
-                processed = signal.lfilter(b, a, processed.astype(np.float32))
+                b, a = _cached_coeffs(
+                    f"hpf:{channel}", 80,
+                    lambda: signal.butter(2, 80 / 24000, btype='high'),
+                )
+                processed = _stream_lfilter(f"hpf:{channel}", b, a, processed.astype(np.float32))
                 processed = np.clip(processed, -32768, 32767).astype(np.int16)
             except Exception:
                 pass
@@ -495,7 +556,7 @@ def _process_mono_chain(audio_data):
         # ===== 2. BASS BOOST (Add bass after HPF) =====
         if config.get('bass', 0) > 0:
             if SCIPY_AVAILABLE:
-                processed = apply_bass_boost_advanced(processed, config.get('bass', 0))
+                processed = apply_bass_boost_advanced(processed, config.get('bass', 0), channel=channel)
             else:
                 processed = apply_bass_boost_basic(processed, config.get('bass', 0))
 
@@ -504,21 +565,24 @@ def _process_mono_chain(audio_data):
             processed = apply_soft_gain(processed, config.get('gain', 0))
 
         # ===== 4. VOLUME (Final volume control) =====
-        if config.get('volume', 100) != 100:
-            processed = apply_volume_boost(processed, config.get('volume', 100))
+        if config.get('volume', 200) != 100:
+            processed = apply_volume_boost(processed, config.get('volume', 200))
 
         # ===== 5. TREBLE BOOST (Add clarity after volume) =====
         if config.get('treble', 0) > 0:
             if SCIPY_AVAILABLE:
-                processed = apply_treble_boost_advanced(processed, config.get('treble', 0))
+                processed = apply_treble_boost_advanced(processed, config.get('treble', 0), channel=channel)
             else:
                 processed = apply_treble_boost_basic(processed, config.get('treble', 0))
 
         # ===== 6. LOW-PASS FILTER (Remove high-frequency noise last) =====
         if config.get('lowpass', False) and SCIPY_AVAILABLE:
             try:
-                b, a = signal.butter(4, 16000 / 24000, btype='low')
-                processed = signal.lfilter(b, a, processed.astype(np.float32))
+                b, a = _cached_coeffs(
+                    f"lpf:{channel}", 16000,
+                    lambda: signal.butter(4, 16000 / 24000, btype='low'),
+                )
+                processed = _stream_lfilter(f"lpf:{channel}", b, a, processed.astype(np.float32))
                 processed = np.clip(processed, -32768, 32767).astype(np.int16)
             except Exception:
                 pass
@@ -646,7 +710,6 @@ async def _start_recording(sel_chat, duration, dest, status_id):
 
 async def _finalize_recording(reason):
     """Recording rok kar PCM->MP3 encode kar ke upload karo. Double-call safe."""
-    from datetime import datetime
     async with _rec_finalize_lock:
         if not mp3_rec["active"]:
             return
@@ -793,7 +856,7 @@ async def cmd_startrecord(client, message):
         raw = re.sub(r'[^\d]', '', parts[1])
         if not raw:
             await message.reply(
-                "❌ **ɢᴀʟᴀᴛ ᴅᴜʀᴀᴛɪᴏɴ**\n\n"
+                "❌ **ɢᴀʟᴀᴛ ᴅᴜʀ���ᴛɪᴏɴ**\n\n"
                 "ᴜꜱᴀɢᴇ: `/startrecord` ya `/startrecord <seconds>`\n"
                 "ʀᴀɴɢᴇ: 5 - 3600 sec"
             )
@@ -875,6 +938,7 @@ async def cmd_stoprecord(client, message):
 
 @call_py.on_update(pytg_filters.stream_frame(Direction.INCOMING, Device.MICROPHONE))
 async def audio_forwarder(_, update: StreamFrames):
+    """pytgcalls stream-frame handler - process and forward incoming audio"""
     await _forward_incoming_frames(update)
 
 
@@ -976,7 +1040,7 @@ async def cmd_approve(client, message):
 ✅ **ᴜꜱᴇʀ ᴀᴘᴘʀᴏᴠᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**
 
 ────────────────────
-👤 **ɴᴀᴍᴇ:** {first_name} ({user_mention})
+👤 **ɴᴀᴍᴇ:** {escape_markdown(str(first_name))} ({user_mention})
 🔢 **ɪᴅ:** `{user_id}`
 📝 **ᴜꜱᴇʀɴᴀᴍᴇ:** @{username}
 📊 **ꜱᴛᴀᴛᴜꜱ:** 🟢 ᴀᴘᴘʀᴏᴠᴇᴅ
@@ -1054,9 +1118,7 @@ async def cmd_userlist(client, message):
             return
         user_list = []
         total = len(approved_users)
-        processed = 0
         for user_id in approved_users:
-            processed += 1
             try:
                 user = await client.get_users(user_id)
                 username = f"@{user.username}" if user.username else "ɴᴏ ᴜꜱᴇʀɴᴀᴍᴇ"
@@ -1069,7 +1131,7 @@ async def cmd_userlist(client, message):
 
 ────────────────────
 📊 **ᴛᴏᴛᴀʟ:** {total} ᴜꜱᴇʀꜱ
-📌 **ᴘʀᴏᴄᴇꜱꜱɪɴɢ:** {processed}/{total}
+
 ────────────────────
 
 """
@@ -1502,7 +1564,7 @@ async def handle_callbacks(client, callback_query: CallbackQuery):
 • ᴀᴅᴠᴀɴᴄᴇᴅ ᴇꜰꜰᴇᴄᴛꜱ
 • ᴠᴏʟᴜᴍᴇ ᴄᴏɴᴛʀᴏʟ
 • ᴍᴜʟᴛɪ-ᴄʜᴀᴛ ꜰᴏʀᴡ��ʀᴅɪɴɢ
-���───────────────────
+���─────────���─────────
 📌 **ᴜꜱᴇ /ʜᴇʟᴘ ꜰᴏʀ ᴄᴏᴍᴍᴀɴᴅꜱ**
 """
         keyboard = build_keyboard([
@@ -1696,7 +1758,7 @@ async def cmd_id(client, message):
 ───���────────────────
 🔢 **ᴄʜᴀᴛ ɪᴅ:** `{message.chat.id}`
 📌 **ᴛʏᴘᴇ:** {chat_type}
-📝 **ᴛɪᴛʟᴇ:** {message.chat.title or 'ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ'}
+📝 **ᴛɪᴛʟᴇ:** {escape_markdown(message.chat.title) if message.chat.title else 'ᴘʀɪᴠᴀᴛᴇ ᴄʜᴀᴛ'}
 ──────────���────────
 
 ✅ **ᴄᴏᴘʏ ᴛʜɪꜱ ɪᴅ ꜰᴏʀ ᴜꜱᴇ ɪɴ ᴄᴏᴍᴍᴀɴᴅꜱ**
@@ -1813,7 +1875,7 @@ async def cmd_join(client, message):
             return
         status_msg = await message.reply(
             f"🔄 **ᴄᴏɴɴᴇᴄᴛɪɴɢ ᴛᴏ `{chat_id}`...**\n\n"
-            "📡 ᴇꜱᴛᴀʙʟɪꜱʜɪɴɢ ᴀᴜᴅɪᴏ ꜰᴏʀᴡᴀʀᴅɪ��ɢ..."
+            "��� ᴇꜱᴛᴀʙʟɪꜱʜɪɴɢ ᴀᴜᴅɪ�� ꜰᴏʀᴡᴀʀᴅɪ��ɢ..."
         )
         success, error = await join_call_safe(chat_id)
         if success:
@@ -2152,7 +2214,7 @@ async def cmd_leaveall(client, message):
     leaveall_msg = f"""
 ✅ **ᴀʟʟ ᴄʜᴀᴛꜱ ᴅɪꜱᴄᴏɴɴᴇᴄᴛᴇᴅ ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ!**
 
-────────────────────
+──────────────��─────
 📡 **ꜱᴏᴜʀᴄᴇ:** ✅ ʟᴇꜰᴛ
 📤 **ꜰᴏʀᴡᴀʀᴅɪɴɢ:** {left_count}/{total_forward} ʟᴇꜰᴛ
 📊 **ꜱᴛᴀᴛᴜꜱ:** 🔴 ᴀʟʟ ᴅɪꜱᴄᴏɴɴᴇᴄᴛᴇᴅ
@@ -2209,7 +2271,7 @@ async def cmd_joinlink(client, message):
         await message.reply(
             f"❌ **ɪɴᴠᴀʟɪᴅ ɪɴᴠɪᴛᴇ ʟɪɴᴋ ꜰᴏʀᴍᴀᴛ!**\n\n"
             f"📌 **ʏᴏᴜ ᴇɴᴛᴇʀᴇᴅ:** `{invite_link}`\n\n"
-            f"💡 **ᴇxᴘᴇᴄᴛᴇᴅ ꜰᴏʀᴍᴀᴛ:**\n"
+            f"💡 **ᴇxᴘᴇᴄᴛᴇᴅ ꜰᴏ��ᴍᴀᴛ:**\n"
             f"• `https://t.me/joinchat/...`\n"
             f"• `https://t.me/+...`"
         )
@@ -2245,7 +2307,7 @@ async def cmd_joinlink(client, message):
 ✅ **ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ ᴊᴏɪɴᴇᴅ!**
 
 ────────────────────
-📌 **ɴᴀᴍᴇ:** {chat_title}
+📌 **ɴᴀᴍᴇ:** {escape_markdown(str(chat_title))}
 📋 **ᴛʏᴘᴇ:** {chat_type}
 🔗 **ʟɪɴᴋ:** `{invite_link}`
 🎯 **ɪᴅ:** `{chat_id}`
@@ -2496,7 +2558,7 @@ async def cmd_joingroup(client, message):
 ✅ **ꜱᴜᴄᴄᴇꜱꜱꜰᴜʟʟʏ ᴊᴏɪɴᴇᴅ!**
 
 ────────────────────
-📌 **ɴᴀᴍᴇ:** {chat_title}
+📌 **ɴᴀᴍᴇ:** {escape_markdown(str(chat_title))}
 📋 **ᴛʏᴘᴇ:** {chat_type}
 🔗 **ᴊᴏɪɴ ᴍᴇᴛʜᴏᴅ:** {join_method}
 🎯 **ɪᴅ:** `{chat_id}`
@@ -2529,7 +2591,7 @@ async def cmd_joingroup(client, message):
         elif "invalid" in error_str and "hash" in error_str:
             response = f"❌ **ɪɴᴠᴀʟɪᴅ ɪɴᴠɪᴛᴇ ʟɪɴᴋ!**\n\n📌 `{input_value}`\n\nᴘʟᴇᴀꜱᴇ ᴄʜᴇᴄᴋ ᴛʜᴇ ʟɪɴᴋ ᴀɴᴅ ᴛʀʏ ᴀɢᴀɪɴ."
         elif "flood" in error_str:
-            response = "⚠️ **ꜰʟᴏᴏᴅ ᴄᴏɴᴛʀᴏ��!**\n\nᴘʟᴇᴀꜱᴇ ᴡᴀɪᴛ ᴀ ꜰᴇᴡ ᴍɪɴᴜᴛᴇꜱ ʙᴇꜰᴏʀᴇ ᴛʀʏɪɴɢ ᴀɢᴀɪɴ."
+            response = "⚠️ **ꜰʟᴏᴏᴅ ᴄᴏɴᴛʀᴏ��!**\n\nᴘʟᴇᴀꜱᴇ ᴡᴀɪᴛ ᴀ ꜰ���ᴡ ᴍɪɴᴜᴛᴇꜱ ʙᴇꜰᴏʀᴇ ᴛʀʏɪɴɢ ᴀɢᴀɪɴ."
         elif "not found" in error_str:
             response = f"❌ **ᴄʜᴀᴛ ɴ���ᴛ ꜰᴏᴜɴᴅ!**\n\n📌 `{input_value}`\n\nᴛʜᴇ ᴄʜᴀᴛ ᴍᴀʏ ɴᴏᴛ ᴇxɪꜱᴛ ᴏʀ ʏᴏᴜ ᴅᴏɴ'ᴛ ʜᴀᴠᴇ ᴀᴄᴄᴇꜱꜱ."
         elif "private" in error_str:
@@ -2872,7 +2934,7 @@ async def cmd_reset(client, message):
     
     # Reset basic audio config
     audio_config = {
-        'volume': 100,
+        'volume': 200,
         'bass': 0,
         'treble': 0,
         'gain': 0,
@@ -2937,7 +2999,7 @@ async def cmd_effects(client, message):
 
 ────────────────────
 ⚙️ **ꜰᴇᴀᴛᴜʀᴇꜱ**
-• ᴄᴏᴍᴘʀᴇꜱꜱᴏʀ: {'✅ ᴇɴᴀʙʟᴇᴅ' if config['compressor'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
+• ᴄᴏᴍᴘʀᴇꜱꜱᴏʀ: {'✅ ᴇɴᴀʙʟᴇᴅ' if config['compressor'] else '��� ᴅɪꜱᴀʙʟᴇᴅ'}
 • ʟɪᴍɪᴛᴇʀ: {'✅ ᴇɴᴀʙʟᴇᴅ' if config['limiter'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
 • ʜɪɢʜᴘᴀꜱꜱ: {'✅ ᴇɴᴀʙʟᴇᴅ' if config['highpass'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
 • ʟᴏᴡᴘᴀꜱꜱ: {'✅ ᴇɴᴀʙʟᴇᴅ' if config['lowpass'] else '❌ ᴅɪꜱᴀʙʟᴇᴅ'}
@@ -3185,7 +3247,7 @@ async def cmd_setsession(client, message):
         pass
 
     # ⚠️ purani .session file hata do warna pyrogram usi ko load karega (naya session ignore ho jayega)
-    for _sf_name in ("user_session_v5.session", "user_session_v5.session-journal"):
+    for _sf_name in (f"{USER_SESSION_NAME}.session", f"{USER_SESSION_NAME}.session-journal"):
         try:
             if os.path.exists(_sf_name):
                 os.remove(_sf_name)
@@ -3448,7 +3510,7 @@ async def cmd_panel(client, message):
 @bot_app.on_callback_query(pyro_filters.regex(r"^panel_"))
 async def panel_callbacks(client, callback_query: CallbackQuery):
     """ʜᴀ��ᴅʟᴇ ᴀʟʟ panel_* ᴄᴀʟʟʙᴀᴄᴋ Qᴜᴇʀɪᴇꜱ ꜰʀᴏᴍ /panel"""
-    global is_muted, audio_config, RECORD_SOURCE  
+    global is_muted, audio_config  
     
     data = callback_query.data
     user_id = callback_query.from_user.id
@@ -3554,7 +3616,7 @@ async def panel_callbacks(client, callback_query: CallbackQuery):
     elif data == "panel_reset":
         # ✅ FIX: Use .update() instead of reassigning
         audio_config.update({
-            'volume': 100,
+            'volume': 200,
             'bass': 0,
             'treble': 0,
             'gain': 0,
@@ -3605,7 +3667,7 @@ async def panel_callbacks(client, callback_query: CallbackQuery):
             await callback_query.answer("⚠️ ᴄᴏᴜʟᴅ ɴᴏᴛ ᴄʟᴏꜱᴇ", show_alert=True)
 
 
-# ==================== ʀᴇꜰʀᴇꜱʜ ᴘᴀɴᴇʟ ꜰᴜɴᴄᴛɪᴏɴ ====================
+# ==================== ʀ��ꜰʀᴇꜱʜ ᴘᴀɴᴇʟ ꜰᴜɴᴄᴛɪᴏɴ ====================
 
 async def refresh_panel(client, callback_query: CallbackQuery):
     """ʀᴇꜰʀᴇꜱʜ ᴛʜᴇ ᴘᴀɴᴇʟ ᴡɪᴛʜ ᴄᴜʀʀᴇɴᴛ ꜱᴛᴀᴛᴜꜱ"""
@@ -3713,7 +3775,7 @@ def ensure_video(mode):
             ["ffmpeg", "-y"]
             + cfg["ff_inputs"]
             + cfg["ff_filter"]
-            + ["-t", "3600", "-c:v", "libx264", "-preset", "ultrafast",
+            + ["-t", "300", "-c:v", "libx264", "-preset", "ultrafast",
                "-pix_fmt", "yuv420p", "-an", path]
         )
         subprocess.run(
@@ -3896,6 +3958,66 @@ async def cmd_screencamera(client, message):
     await _handle_video_command(message, "screencamera", "screencamera")
 
 
+# ==================== COLD-START AUTO-REJOIN ====================
+
+async def _cold_start_rejoin():
+    """Process restart ke baad state-file me saved forward_chats + source VC me
+    dobara join karo aur saved mute state reapply karo. Pehle load_state() sirf
+    memory bharta tha par VC join nahi hota tha -> restart ke baad forwarding
+    'dead' lagti thi (state <-> reality mismatch). Yeh us gap ko fix karta hai."""
+    global is_recording, is_muted
+
+    if not forward_chats:
+        logger.info("ᴄᴏʟᴅ-ꜱᴛᴀʀᴛ: ᴋᴏɪ ꜱᴀᴠᴇᴅ ꜰᴏʀᴡᴀʀᴅ ᴄʜᴀᴛ ɴᴀʜɪ - ᴀᴜᴛᴏ-ʀᴇᴊᴏɪɴ ꜱᴋɪᴘ")
+        return
+
+    reset_filter_states()
+
+    # 1) Source VC join + recording start (forwarding ka source)
+    try:
+        ok, err = await join_call_safe(RECORD_SOURCE)
+        if ok:
+            try:
+                await call_py.record(RECORD_SOURCE, RecordStream(True, AUDIO_PARAMETERS))
+                is_recording = True
+                logger.info(f"ᴄᴏʟᴅ-ꜱᴛᴀʀᴛ: ꜱᴏᴜʀᴄᴇ {RECORD_SOURCE} ʀᴇᴄᴏʀᴅɪɴɢ ᴏɴ")
+            except Exception as e:
+                logger.error(f"ᴄᴏʟᴅ-ꜱᴛᴀʀᴛ ʀᴇᴄᴏʀᴅ ᴇʀʀᴏʀ: {e}")
+        else:
+            logger.error(f"ᴄᴏʟᴅ-ꜱᴛᴀʀᴛ ꜱᴏᴜʀᴄᴇ ᴊᴏɪɴ ꜰᴀɪʟ: {err}")
+    except Exception as e:
+        logger.error(f"ᴄᴏʟᴅ-ꜱᴛᴀʀᴛ ꜱᴏᴜʀᴄᴇ ᴇʀʀᴏʀ: {e}")
+
+    # 2) Saare forward chats dobara join karo
+    rejoined = 0
+    for chat_id in list(forward_chats):
+        try:
+            ok, err = await join_call_safe(chat_id)
+            if ok:
+                rejoined += 1
+            else:
+                logger.warning(f"ᴄᴏʟᴅ-ꜱᴛᴀʀᴛ ꜰᴏʀ��ᴀʀᴅ ᴊᴏɪɴ ꜰᴀɪʟ {chat_id}: {err}")
+                forward_chats.discard(chat_id)
+        except Exception as e:
+            logger.error(f"ᴄᴏʟᴅ-ꜱᴛᴀʀᴛ ꜰᴏʀᴡᴀʀᴅ ᴇʀʀᴏʀ {chat_id}: {e}")
+
+    # 3) Saved mute state dobara apply karo (state <-> reality match)
+    if is_muted and forward_chats:
+        for chat_id in list(forward_chats):
+            try:
+                await call_py.mute(chat_id)
+            except Exception as e:
+                logger.debug(f"ᴄᴏʟᴅ-ꜱ��ᴀʀᴛ ʀᴇ-ᴍᴜᴛᴇ ꜰᴀɪʟ {chat_id}: {e}")
+    elif not forward_chats:
+        is_muted = False
+
+    save_state()
+    logger.info(
+        f"ᴄᴏʟᴅ-ꜱᴛᴀʀᴛ ʀᴇᴊᴏɪɴ ᴅᴏɴᴇ: {rejoined} ꜰᴏʀᴡᴀʀᴅ(ꜱ), "
+        f"ʀᴇᴄᴏʀᴅɪɴɢ={is_recording}, ᴍᴜᴛᴇᴅ={is_muted}"
+    )
+
+
 # ==================== MAIN ====================
 
 if __name__ == "__main__":
@@ -3929,12 +4051,23 @@ if __name__ == "__main__":
             print(f"⚠️ ᴘʏᴛɢᴄᴀʟʟꜱ ꜱᴛᴀʀᴛ ꜰᴀɪʟᴇᴅ (User session error): {e}")
             print("   ʙᴏᴛ ᴡɪʟʟ ꜱᴛɪʟʟ ʀᴜɴ ꜰᴏʀ ʙᴏᴛ ᴄᴏᴍᴍᴀɴᴅꜱ!\n")
         
+        # ===== COLD-START AUTO-REJOIN (saved forwards/source/mute wapas live) =====
+        try:
+            _cs_loop = getattr(user_app, "loop", None)
+            if _cs_loop is not None and _cs_loop.is_running():
+                asyncio.run_coroutine_threadsafe(_cold_start_rejoin(), _cs_loop).result(timeout=180)
+            elif _cs_loop is not None:
+                _cs_loop.run_until_complete(_cold_start_rejoin())
+            print("✅ ᴄᴏʟᴅ-ꜱᴛᴀʀᴛ ᴀᴜᴛᴏ-ʀᴇᴊᴏɪɴ ᴅᴏɴᴇ")
+        except Exception as e:
+            print(f"⚠️ ᴄᴏʟᴅ-ꜱᴛᴀʀᴛ ʀᴇᴊᴏɪɴ ᴇʀʀᴏʀ: {e}")
+        
         # Print help/status
         print("\n✅ ᴏɴʟɪɴᴇ! ᴜꜱᴇ /ʀᴇᴄᴏʀᴅ ᴛʜᴇɴ /ᴊᴏɪɴ")
         print("📌 ᴏᴡɴᴇʀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴀᴘᴘʀᴏᴠᴇ, /ᴅɪꜱᴀᴘᴘʀᴏᴠᴇ, /ᴜꜱᴇʀʟɪꜱᴛ, /ʀᴇꜱᴛᴀʀᴛ, /ꜱᴇᴛꜱᴇꜱꜱɪᴏɴ")
         print("📌 ᴀᴜᴅɪᴏ ᴄᴏᴍᴍᴀɴᴅꜱ: /ʟᴇᴠᴇʟ, /ʙᴀꜱꜱ, /ᴛʀᴇʙʟᴇ, /ɢᴀɪɴ, /ᴇꜰꜰᴇᴄᴛꜱ")
         print("📌 ᴇxᴛʀᴀ ᴄᴏᴍᴍᴀɴᴅꜱ: /ᴘɪɴɢ, /ꜱᴛᴀᴛꜱ, /panel")
-        print("⚠️ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜꜱᴇʀꜱ ɢᴇᴛ ɴᴏ ʀᴇꜱᴘᴏɴꜱᴇ (ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ)\n")
+        print("⚠️ ᴜɴᴀᴜᴛʜᴏʀɪᴢᴇᴅ ᴜ���ᴇʀꜱ ɢᴇᴛ ɴᴏ ʀᴇꜱᴘᴏɴꜱᴇ (ꜱɪʟᴇɴᴛ ɪɢɴᴏʀᴇ)\n")
         
         # Idle (blocks until interrupted)
         idle()
@@ -4014,6 +4147,6 @@ if __name__ == "__main__":
             save_state()
             print("    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇᴅ")
         except Exception as e:
-            print(f"    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇ ᴇʀʀᴏ��: {e}")
+            print(f"    ꜱᴛᴀᴛᴇ ꜱᴀᴠᴇ ᴇʀʀᴏR: {e}")
         
         print("✅ ᴄʟᴇᴀɴᴜᴘ ᴄᴏᴍᴘʟᴇᴛᴇ")
